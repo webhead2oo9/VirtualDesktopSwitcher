@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, for example v0.1.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release
+        shell: powershell
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ inputs.tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+
+          if ($tag -notmatch '^v\d+\.\d+\.\d+([-.][A-Za-z0-9.-]+)?$') {
+            throw "Release tag '$tag' must look like v0.1.0, v1.2.3-beta.1, etc."
+          }
+
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Ensure manual tag exists
+        if: github.event_name == 'workflow_dispatch'
+        shell: powershell
+        run: |
+          $tag = "${{ steps.release.outputs.tag }}"
+          git fetch --tags
+          $existing = git tag --list $tag
+          if (-not $existing) {
+            git tag $tag
+            git push origin $tag
+          }
+
+      - name: Build package
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Package
+
+      - name: Test package
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\test-package.ps1
+
+      - name: Publish GitHub Release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.release.outputs.tag }}"
+          $zip = (Resolve-Path .\artifacts\VirtualDesktopSwitcher.zip).Path
+          $title = "VirtualDesktopSwitcher $tag"
+          $notes = @"
+          ## VirtualDesktopSwitcher $tag
+
+          Built from source by GitHub Actions.
+
+          ### Package
+
+          - ``VirtualDesktopSwitcher.zip``
+
+          ### Backend
+
+          - In-process setter (process injection)
+
+          A no-injection PowerShell / UI Automation variant lives on the
+          ``uia-powershell`` branch.
+          "@
+
+          $existingRelease = gh release list --limit 1000 --json tagName | ConvertFrom-Json | Where-Object { $_.tagName -eq $tag } | Select-Object -First 1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to list GitHub releases."
+          }
+
+          if ($existingRelease) {
+            gh release upload $tag $zip --clobber
+          } else {
+            gh release create $tag $zip --title $title --notes $notes
+          }
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to publish GitHub release $tag."
+          }

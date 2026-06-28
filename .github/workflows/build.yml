@@ -1,0 +1,34 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build release package
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Build package
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Package
+
+      - name: Test package
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\test-package.ps1
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: VirtualDesktopSwitcher
+          path: artifacts/VirtualDesktopSwitcher.zip

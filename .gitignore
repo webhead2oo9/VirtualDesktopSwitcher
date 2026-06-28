@@ -1,0 +1,22 @@
+# PowerShell/module artifacts
+*.ps1xml
+*.psm1~
+*.ps1~
+
+# Logs and temporary output
+*.log
+*.tmp
+*.bak
+*.old
+
+# OS/editor noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+# Build outputs
+build/
+dist/
+artifacts/
+packages/
