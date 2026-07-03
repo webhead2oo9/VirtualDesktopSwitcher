@@ -70,7 +70,8 @@ namespace VirtualDesktopSwitcher
 
             Log("VirtualDesktopSwitcher started. Backend: in-process; Codecs: " +
                 string.Join(", ", codecs.Select(c => c.Code).ToArray()) +
-                "; interval: " + options.IntervalMinutes + " minute(s).");
+                "; interval: " + options.IntervalMinutes + " minute(s)" +
+                "; beep warning: " + (options.BeepWarning ? "on" : "off") + ".");
 
             if (options.SwitchImmediately)
             {
@@ -79,8 +80,50 @@ namespace VirtualDesktopSwitcher
 
             while (true)
             {
-                Thread.Sleep(TimeSpan.FromMinutes(options.IntervalMinutes));
+                WaitForNextSwitch();
                 SwitchToNextCodec(codecs);
+            }
+        }
+
+        private void WaitForNextSwitch()
+        {
+            TimeSpan interval = TimeSpan.FromMinutes(options.IntervalMinutes);
+            TimeSpan warning = TimeSpan.FromSeconds(5);
+
+            if (!options.BeepWarning)
+            {
+                Thread.Sleep(interval);
+                return;
+            }
+
+            if (interval > warning)
+            {
+                Thread.Sleep(interval - warning);
+                BeepBeforeSwitch((int)warning.TotalSeconds);
+                return;
+            }
+
+            Thread.Sleep(interval);
+        }
+
+        private static void BeepBeforeSwitch(int seconds)
+        {
+            Log("Switching codec in " + seconds + " second(s).");
+
+            for (int remaining = seconds; remaining > 0; remaining--)
+            {
+                Stopwatch tick = Stopwatch.StartNew();
+                try
+                {
+                    Console.Beep(1200, 160);
+                }
+                catch
+                {
+                    // Beep support depends on the active Windows audio/session setup.
+                }
+
+                int remainingMilliseconds = Math.Max(0, 1000 - (int)tick.ElapsedMilliseconds);
+                Thread.Sleep(remainingMilliseconds);
             }
         }
 
@@ -98,11 +141,13 @@ namespace VirtualDesktopSwitcher
 
             CodecOperationResult current = client.GetCodec();
             CodecInfo currentCodec = CodecCatalog.Resolve(current.Current);
-            ToggleSelection selection = ToggleSelectionDialog.Show(currentCodec, options.IntervalMinutes);
+            ToggleSelection selection = ToggleSelectionDialog.Show(currentCodec, options.IntervalMinutes, options.BeepWarning);
             options.IntervalMinutes = selection.IntervalMinutes;
+            options.BeepWarning = selection.BeepWarning;
 
             Log("Toggle pair selected: " + currentCodec.Code + ", " + selection.Codec.Code +
-                "; interval: " + options.IntervalMinutes + " minute(s).");
+                "; interval: " + options.IntervalMinutes + " minute(s)" +
+                "; beep warning: " + (options.BeepWarning ? "on" : "off") + ".");
 
             return new List<CodecInfo> { currentCodec, selection.Codec };
         }
@@ -331,11 +376,12 @@ namespace VirtualDesktopSwitcher
     {
         public CodecInfo Codec;
         public int IntervalMinutes;
+        public bool BeepWarning;
     }
 
     internal static class ToggleSelectionDialog
     {
-        public static ToggleSelection Show(CodecInfo currentCodec, int initialIntervalMinutes)
+        public static ToggleSelection Show(CodecInfo currentCodec, int initialIntervalMinutes, bool initialBeepWarning)
         {
             Application.EnableVisualStyles();
 
@@ -351,7 +397,7 @@ namespace VirtualDesktopSwitcher
             form.MinimizeBox = false;
             form.ShowInTaskbar = true;
             form.TopMost = true;
-            form.ClientSize = new Size(420, 218);
+            form.ClientSize = new Size(420, 250);
 
             Label label = new Label();
             label.AutoSize = false;
@@ -392,9 +438,16 @@ namespace VirtualDesktopSwitcher
             minutesLabel.Text = "minute(s)";
             form.Controls.Add(minutesLabel);
 
+            CheckBox beepWarningInput = new CheckBox();
+            beepWarningInput.AutoSize = true;
+            beepWarningInput.Location = new Point(16, 150);
+            beepWarningInput.Text = "Beep 5 seconds before each timer switch";
+            beepWarningInput.Checked = initialBeepWarning;
+            form.Controls.Add(beepWarningInput);
+
             Button okButton = new Button();
             okButton.Text = "OK";
-            okButton.Location = new Point(248, 168);
+            okButton.Location = new Point(248, 204);
             okButton.Size = new Size(75, 28);
             okButton.DialogResult = DialogResult.OK;
             form.AcceptButton = okButton;
@@ -402,7 +455,7 @@ namespace VirtualDesktopSwitcher
 
             Button cancelButton = new Button();
             cancelButton.Text = "Cancel";
-            cancelButton.Location = new Point(329, 168);
+            cancelButton.Location = new Point(329, 204);
             cancelButton.Size = new Size(75, 28);
             cancelButton.DialogResult = DialogResult.Cancel;
             form.CancelButton = cancelButton;
@@ -417,7 +470,8 @@ namespace VirtualDesktopSwitcher
             return new ToggleSelection
             {
                 Codec = selected.Codec,
-                IntervalMinutes = (int)intervalInput.Value
+                IntervalMinutes = (int)intervalInput.Value,
+                BeepWarning = beepWarningInput.Checked
             };
         }
 
@@ -533,6 +587,7 @@ namespace VirtualDesktopSwitcher
     {
         public readonly List<string> Codecs = new List<string>();
         public int IntervalMinutes = 25;
+        public bool BeepWarning;
         public string TargetCodec;
         public bool Once;
         public bool SwitchImmediately;
@@ -560,6 +615,16 @@ namespace VirtualDesktopSwitcher
                     case "INTERVALMINUTES":
                     case "INTERVAL":
                         options.IntervalMinutes = ParseRange(RequireValue(args, ref i, args[i]), "IntervalMinutes", 1, 10080);
+                        break;
+                    case "BEEPWARNING":
+                    case "BEEP":
+                    case "WARNINGBEEP":
+                        options.BeepWarning = true;
+                        break;
+                    case "NOBEEPWARNING":
+                    case "NOBEEP":
+                    case "SILENT":
+                        options.BeepWarning = false;
                         break;
                     case "TARGETCODEC":
                     case "TARGET":
@@ -645,6 +710,8 @@ namespace VirtualDesktopSwitcher
             Console.WriteLine("Options:");
             Console.WriteLine("  --codecs <list>              Comma-separated codec rotation list.");
             Console.WriteLine("  --interval-minutes <n>       Minutes between switches. Default: 25.");
+            Console.WriteLine("  --beep-warning              Beep during the final 5 seconds before timer switches.");
+            Console.WriteLine("  --no-beep-warning           Keep timer switches silent. Default.");
             Console.WriteLine("  --target-codec <codec>       Set one exact codec and exit.");
             Console.WriteLine("  --once                       Switch once and exit.");
             Console.WriteLine("  --switch-immediately         Switch immediately before entering the timer loop.");

@@ -62,7 +62,8 @@ Download a release, unzip it, and run the executable from that folder:
 ```
 
 With no codec arguments, it reads the current codec and opens a small popup
-asking which different codec to toggle with, and how many minutes to wait
+asking which different codec to toggle with, whether to beep before timer
+switches, and how many minutes to wait
 between switches (default `25`, range `1`–`10080`).
 
 Prefer to build it yourself? See [Building from source](#building-from-source).
@@ -75,6 +76,9 @@ Prefer to build it yourself? See [Building from source](#building-from-source).
 
 # Explicit toggle pair on a 25-minute timer
 .\VirtualDesktopSwitcher.exe --codecs HEVC10bit,HEVC --interval-minutes 25
+
+# Beep during the final 5 seconds before each timer switch
+.\VirtualDesktopSwitcher.exe --codecs HEVC10bit,HEVC --interval-minutes 25 --beep-warning
 
 # Switch once and exit
 .\VirtualDesktopSwitcher.exe --codecs HEVC10bit,HEVC --once
@@ -95,6 +99,8 @@ Prefer to build it yourself? See [Building from source](#building-from-source).
 |---|---|
 | `--codecs <list>` | Comma-separated codec rotation list. Skips the popup. |
 | `--interval-minutes <n>` | Minutes between switches. Default `25`, range `1`–`10080`. |
+| `--beep-warning` | Beep during the final 5 seconds before each timer switch. |
+| `--no-beep-warning` | Keep timer switches silent. Default. |
 | `--target-codec <codec>` | Set one exact codec and exit. |
 | `--once` | Switch to the next codec once and exit. |
 | `--switch-immediately` | Switch immediately before entering the timer loop. |
