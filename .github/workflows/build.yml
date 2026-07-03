@@ -1,34 +1,43 @@
 name: Build
 
 on:
-  push:
-    branches:
-      - main
-      - master
-  pull_request:
-  workflow_dispatch:
+    push:
+        branches-ignore:
+            - main
+        paths:
+            - ".github/workflows/build.yml"
+            - "build.ps1"
+            - "test-package.ps1"
+            - "src/**"
+    pull_request:
+        paths:
+            - ".github/workflows/build.yml"
+            - "build.ps1"
+            - "test-package.ps1"
+            - "src/**"
+    workflow_dispatch:
 
 jobs:
-  build:
-    name: Build release package
-    runs-on: windows-latest
+    build:
+        name: Build release package
+        runs-on: windows-latest
 
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v7
+        steps:
+            - name: Check out source
+              uses: actions/checkout@v7
 
-      - name: Build package
-        shell: powershell
-        run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Package
+            - name: Build package
+              shell: powershell
+              run: |
+                  powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Package
 
-      - name: Test package
-        shell: powershell
-        run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\test-package.ps1
+            - name: Test package
+              shell: powershell
+              run: |
+                  powershell -NoProfile -ExecutionPolicy Bypass -File .\test-package.ps1
 
-      - name: Upload release artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: VirtualDesktopSwitcher
-          path: artifacts/VirtualDesktopSwitcher.zip
+            - name: Upload release artifact
+              uses: actions/upload-artifact@v7
+              with:
+                  name: VirtualDesktopSwitcher
+                  path: artifacts/VirtualDesktopSwitcher.zip

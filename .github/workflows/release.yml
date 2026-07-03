@@ -1,104 +1,198 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag, for example v0.1.0'
-        required: true
-        type: string
+    push:
+        branches:
+            - main
+        paths:
+            - ".github/workflows/release.yml"
+            - "build.ps1"
+            - "test-package.ps1"
+            - "src/**"
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Release tag. Leave blank to use branch-shortsha."
+                required: false
+                type: string
 
 permissions:
-  contents: write
+    contents: write
 
 jobs:
-  release:
-    name: Build and publish release
-    runs-on: windows-latest
+    release:
+        name: Build and publish release
+        runs-on: windows-latest
 
-    steps:
-      - name: Check out source
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
+        steps:
+            - name: Check out source
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
 
-      - name: Resolve release tag
-        id: release
-        shell: powershell
-        run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $tag = "${{ inputs.tag }}"
-          } else {
-            $tag = "${{ github.ref_name }}"
-          }
+            - name: Resolve release metadata
+              id: release
+              shell: powershell
+              run: |
+                  $eventName = "${{ github.event_name }}"
+                  $inputTag = "${{ inputs.tag }}"
+                  $refName = "${{ github.ref_name }}"
+                  $sha = "${{ github.sha }}"
+                  $shortSha = $sha.Substring(0, 7)
 
-          if ($tag -notmatch '^v\d+\.\d+\.\d+([-.][A-Za-z0-9.-]+)?$') {
-            throw "Release tag '$tag' must look like v0.1.0, v1.2.3-beta.1, etc."
-          }
+                  if ($eventName -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($inputTag)) {
+                    $tag = $inputTag.Trim()
+                  } else {
+                    $safeRef = $refName -replace '[^A-Za-z0-9._-]+', '-'
+                    $tag = "$safeRef-$shortSha"
+                  }
 
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                  if ($tag -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+                    throw "Release tag '$tag' contains unsupported characters."
+                  }
 
-      - name: Ensure manual tag exists
-        if: github.event_name == 'workflow_dispatch'
-        shell: powershell
-        run: |
-          $tag = "${{ steps.release.outputs.tag }}"
-          git fetch --tags
-          $existing = git tag --list $tag
-          if (-not $existing) {
-            git tag $tag
-            git push origin $tag
-          }
+                  "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+                  "title=VirtualDesktopSwitcher $tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
-      - name: Build package
-        shell: powershell
-        run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Package
+            - name: Ensure release tag exists
+              shell: powershell
+              run: |
+                  $tag = "${{ steps.release.outputs.tag }}"
+                  $sha = "${{ github.sha }}"
+                  git fetch --tags
+                  $existing = git tag --list $tag
 
-      - name: Test package
-        shell: powershell
-        run: |
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\test-package.ps1
+                  if ($existing) {
+                    $existingSha = git rev-list -n 1 $tag
+                    if ($LASTEXITCODE -ne 0) {
+                      throw "Unable to resolve existing tag $tag."
+                    }
 
-      - name: Publish GitHub Release
-        shell: powershell
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = "${{ steps.release.outputs.tag }}"
-          $zip = (Resolve-Path .\artifacts\VirtualDesktopSwitcher.zip).Path
-          $title = "VirtualDesktopSwitcher $tag"
-          $notes = @"
-          ## VirtualDesktopSwitcher $tag
+                    if ($existingSha -ne $sha) {
+                      throw "Release tag '$tag' already points to $existingSha, not $sha."
+                    }
+                  } else {
+                    git tag $tag $sha
+                    git push origin $tag
+                  }
 
-          Built from source by GitHub Actions.
+            - name: Generate release notes
+              id: notes
+              shell: powershell
+              run: |
+                  $tag = "${{ steps.release.outputs.tag }}"
+                  $eventName = "${{ github.event_name }}"
+                  $refName = "${{ github.ref_name }}"
+                  $repo = "${{ github.repository }}"
+                  $serverUrl = "${{ github.server_url }}"
+                  $runId = "${{ github.run_id }}"
+                  $headSha = "${{ github.sha }}"
+                  $before = "${{ github.event.before }}"
+                  $shortSha = git rev-parse --short HEAD
+                  $subject = git log -1 --pretty=%s
+                  $body = git log -1 --pretty=%b
+                  $authorName = git log -1 --pretty=%an
+                  $authorEmail = git log -1 --pretty=%ae
+                  $commitDate = git log -1 --date=iso-strict --pretty=%ad
+                  $commitUrl = "$serverUrl/$repo/commit/$headSha"
+                  $runUrl = "$serverUrl/$repo/actions/runs/$runId"
 
-          ### Package
+                  $range = "HEAD"
+                  if ($eventName -eq "push" -and
+                      -not [string]::IsNullOrWhiteSpace($before) -and
+                      $before -notmatch '^0+$') {
+                    $range = "$before..HEAD"
+                  }
 
-          - ``VirtualDesktopSwitcher.zip``
+                  $commitRows = git log --reverse --format="%H%x09%an%x09%s" $range
+                  if (-not $commitRows) {
+                    $commitRows = git log -1 --format="%H%x09%an%x09%s"
+                  }
 
-          ### Backend
+                  $notes = New-Object System.Collections.Generic.List[string]
+                  $notes.Add("## VirtualDesktopSwitcher $tag")
+                  $notes.Add("")
+                  $notes.Add("Built from source by GitHub Actions.")
+                  $notes.Add("")
+                  $notes.Add("### Commit")
+                  $notes.Add("")
+                  $notes.Add("- Branch: ``$refName``")
+                  $notes.Add("- Head commit: [``$shortSha``]($commitUrl)")
+                  $notes.Add("- Author: $authorName <$authorEmail>")
+                  $notes.Add("- Date: $commitDate")
+                  $notes.Add("- Workflow run: [#$runId]($runUrl)")
+                  $notes.Add("")
+                  $notes.Add("### Message")
+                  $notes.Add("")
+                  $notes.Add($subject)
 
-          - In-process setter (process injection)
+                  if (-not [string]::IsNullOrWhiteSpace($body)) {
+                    $notes.Add("")
+                    $notes.Add($body.Trim())
+                  }
 
-          A no-injection PowerShell / UI Automation variant lives on the
-          ``uia-powershell`` branch.
-          "@
+                  $notes.Add("")
+                  $notes.Add("### Commits In This Push")
+                  $notes.Add("")
 
-          $existingRelease = gh release list --limit 1000 --json tagName | ConvertFrom-Json | Where-Object { $_.tagName -eq $tag } | Select-Object -First 1
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unable to list GitHub releases."
-          }
+                  foreach ($row in $commitRows) {
+                    $parts = $row -split "`t", 3
+                    if ($parts.Count -lt 3) {
+                      continue
+                    }
 
-          if ($existingRelease) {
-            gh release upload $tag $zip --clobber
-          } else {
-            gh release create $tag $zip --title $title --notes $notes
-          }
+                    $commitSha = $parts[0]
+                    $commitShort = $commitSha.Substring(0, 7)
+                    $commitAuthor = $parts[1]
+                    $commitSubject = $parts[2]
+                    $notes.Add("- [``$commitShort``]($serverUrl/$repo/commit/$commitSha) $commitSubject ($commitAuthor)")
+                  }
 
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unable to publish GitHub release $tag."
-          }
+                  $notes.Add("")
+                  $notes.Add("### Package")
+                  $notes.Add("")
+                  $notes.Add("- ``VirtualDesktopSwitcher.zip``")
+
+                  $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+                  $notes | Set-Content -LiteralPath $notesPath -Encoding UTF8
+                  "notes_path=$notesPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+            - name: Build package
+              shell: powershell
+              run: |
+                  powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Package
+
+            - name: Test package
+              shell: powershell
+              run: |
+                  powershell -NoProfile -ExecutionPolicy Bypass -File .\test-package.ps1
+
+            - name: Publish GitHub Release
+              shell: powershell
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  $tag = "${{ steps.release.outputs.tag }}"
+                  $title = "${{ steps.release.outputs.title }}"
+                  $notesPath = "${{ steps.notes.outputs.notes_path }}"
+                  $zip = (Resolve-Path .\artifacts\VirtualDesktopSwitcher.zip).Path
+
+                  $existingRelease = gh release list --limit 1000 --json tagName | ConvertFrom-Json | Where-Object { $_.tagName -eq $tag } | Select-Object -First 1
+                  if ($LASTEXITCODE -ne 0) {
+                    throw "Unable to list GitHub releases."
+                  }
+
+                  if ($existingRelease) {
+                    gh release edit $tag --title $title --notes-file $notesPath
+                    if ($LASTEXITCODE -ne 0) {
+                      throw "Unable to update GitHub release $tag."
+                    }
+
+                    gh release upload $tag $zip --clobber
+                  } else {
+                    gh release create $tag $zip --title $title --notes-file $notesPath
+                  }
+
+                  if ($LASTEXITCODE -ne 0) {
+                    throw "Unable to publish GitHub release $tag."
+                  }
