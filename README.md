@@ -80,6 +80,12 @@ Prefer to build it yourself? See [Building from source](#building-from-source).
 # Beep during the final 5 seconds before each timer switch
 .\VirtualDesktopSwitcher.exe --codecs HEVC10bit,HEVC --interval-minutes 25 --beep-warning
 
+# Keep H.264+ active, briefly switching to H.264 to reset the stream every 25 minutes
+.\VirtualDesktopSwitcher.exe --codecs H264Plus,H264 --interval-minutes 25 --switch-back
+
+# Same, but stay on H.264 for 500 ms before switching back
+.\VirtualDesktopSwitcher.exe --codecs H264Plus,H264 --interval-minutes 25 --switch-back --switch-back-delay-ms 500
+
 # Switch once and exit
 .\VirtualDesktopSwitcher.exe --codecs HEVC10bit,HEVC --once
 
@@ -104,6 +110,8 @@ Prefer to build it yourself? See [Building from source](#building-from-source).
 | `--target-codec <codec>` | Set one exact codec and exit. |
 | `--once` | Switch to the next codec once and exit. |
 | `--switch-immediately` | Switch immediately before entering the timer loop. |
+| `--switch-back` | Treat the first of exactly two codecs as preferred. At each interval, switch to the second codec, wait for the switch-back delay, and restore the first. The preferred codec is also restored when the tool starts. |
+| `--switch-back-delay-ms <n>` | Milliseconds to stay on the temporary codec before restoring the preferred one. Default `50`, range `0`–`60000`. |
 | `--streamer-path <path>` | Path to `VirtualDesktop.Streamer.exe` (used to launch it if not running). |
 | `--timeout-seconds <n>` | Helper timeout in seconds. Default `15`, range `1`–`300`. |
 
@@ -114,6 +122,13 @@ Prefer to build it yourself? See [Building from source](#building-from-source).
 The interactive popup hides the currently selected codec, since the toggle
 target must differ from the current selection. Some GPUs or headsets do not
 support every codec.
+
+With `--switch-back`, specify exactly two codecs. The first is the preferred
+codec and the second is only used temporarily to reset the stream. For example,
+`--codecs H264Plus,H264 --switch-back` keeps H.264+ selected between resets.
+The interactive popup offers the same behavior: check *Switch back to*, pick
+the codec to keep (it defaults to the current one), and pick the delay in
+milliseconds.
 
 ## Building from source
 

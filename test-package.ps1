@@ -64,6 +64,14 @@ if ($helpText -notmatch 'Known codecs: Automatic, H264, H264Plus, HEVC, HEVC10bi
     throw "VirtualDesktopSwitcher.exe --help did not print the expected codec list."
 }
 
+if ($helpText -notmatch '\-\-switch-back') {
+    throw "VirtualDesktopSwitcher.exe --help did not print the switch-back option."
+}
+
+if ($helpText -notmatch '\-\-switch-back-delay-ms') {
+    throw "VirtualDesktopSwitcher.exe --help did not print the switch-back-delay-ms option."
+}
+
 if (-not (Test-Path -LiteralPath $ZipPath -PathType Leaf)) {
     throw "Package zip does not exist: $ZipPath"
 }
