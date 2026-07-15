@@ -43,6 +43,8 @@ namespace VirtualDesktopSwitcher
     {
         private readonly Options options;
         private readonly CodecInjectionClient client;
+        private readonly ManualResetEvent cancelSignal = new ManualResetEvent(false);
+        private volatile bool cancelRequested;
 
         public Rotator(Options options)
         {
@@ -52,6 +54,17 @@ namespace VirtualDesktopSwitcher
 
         public int Run()
         {
+            Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs e)
+            {
+                if (!cancelRequested)
+                {
+                    cancelRequested = true;
+                    cancelSignal.Set();
+                    e.Cancel = true;
+                    Log("Stopping; press Ctrl+C again to force quit.");
+                }
+            };
+
             if (!string.IsNullOrEmpty(options.TargetCodec))
             {
                 CodecInfo target = CodecCatalog.Resolve(options.TargetCodec);
@@ -90,9 +103,20 @@ namespace VirtualDesktopSwitcher
 
             while (true)
             {
-                WaitForNextSwitch();
+                if (!WaitForNextSwitch())
+                {
+                    break;
+                }
+
                 PerformSwitch(codecs);
+                if (cancelRequested)
+                {
+                    break;
+                }
             }
+
+            Log("Stopped by user.");
+            return 0;
         }
 
         private void PerformSwitch(List<CodecInfo> codecs)
@@ -126,41 +150,62 @@ namespace VirtualDesktopSwitcher
                 Log("Preferred Codec: " + awayResult.Before + " -> " + awayResult.After + " (temporary)");
                 if (options.SwitchBackDelayMilliseconds > 0)
                 {
-                    Thread.Sleep(options.SwitchBackDelayMilliseconds);
+                    cancelSignal.WaitOne(options.SwitchBackDelayMilliseconds);
                 }
             }
             catch
             {
-                try { client.SetCodec(preferred.Code); } catch { }
+                try
+                {
+                    client.SetCodec(preferred.Code);
+                }
+                catch (Exception restoreEx)
+                {
+                    Log("WARNING: could not restore preferred codec '" + preferred.Code + "' (" + restoreEx.Message + ").");
+                }
                 throw;
             }
 
-            CodecOperationResult restoreResult = client.SetCodec(preferred.Code);
+            CodecOperationResult restoreResult = RestorePreferredCodec(preferred);
             Log("Preferred Codec: " + restoreResult.Before + " -> " + restoreResult.After + " (restored)");
         }
 
-        private void WaitForNextSwitch()
+        private CodecOperationResult RestorePreferredCodec(CodecInfo preferred)
+        {
+            try
+            {
+                return client.SetCodec(preferred.Code);
+            }
+            catch (Exception ex)
+            {
+                Log("WARNING: could not restore preferred codec '" + preferred.Code + "' (" + ex.Message + "); retrying once.");
+                return client.SetCodec(preferred.Code);
+            }
+        }
+
+        private bool WaitForNextSwitch()
         {
             TimeSpan interval = TimeSpan.FromMinutes(options.IntervalMinutes);
             TimeSpan warning = TimeSpan.FromSeconds(5);
 
             if (!options.BeepWarning)
             {
-                Thread.Sleep(interval);
-                return;
+                return !cancelSignal.WaitOne(interval);
             }
 
             if (interval > warning)
             {
-                Thread.Sleep(interval - warning);
-                BeepBeforeSwitch((int)warning.TotalSeconds);
-                return;
+                if (cancelSignal.WaitOne(interval - warning))
+                {
+                    return false;
+                }
+                return BeepBeforeSwitch((int)warning.TotalSeconds);
             }
 
-            Thread.Sleep(interval);
+            return !cancelSignal.WaitOne(interval);
         }
 
-        private static void BeepBeforeSwitch(int seconds)
+        private bool BeepBeforeSwitch(int seconds)
         {
             Log("Switching codec in " + seconds + " second(s).");
 
@@ -177,8 +222,13 @@ namespace VirtualDesktopSwitcher
                 }
 
                 int remainingMilliseconds = Math.Max(0, 1000 - (int)tick.ElapsedMilliseconds);
-                Thread.Sleep(remainingMilliseconds);
+                if (cancelSignal.WaitOne(remainingMilliseconds))
+                {
+                    return false;
+                }
             }
+
+            return true;
         }
 
         private List<CodecInfo> ResolveCodecRotation()

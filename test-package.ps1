@@ -64,7 +64,7 @@ if ($helpText -notmatch 'Known codecs: Automatic, H264, H264Plus, HEVC, HEVC10bi
     throw "VirtualDesktopSwitcher.exe --help did not print the expected codec list."
 }
 
-if ($helpText -notmatch '\-\-switch-back') {
+if ($helpText -notmatch '\-\-switch-back(\s|$)') {
     throw "VirtualDesktopSwitcher.exe --help did not print the switch-back option."
 }
 
