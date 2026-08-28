@@ -42,6 +42,7 @@ function Invoke-Csc {
 
 New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
+New-Item -ItemType Directory -Path $distRoot -Force | Out-Null
 try {
     New-CleanDirectory $distDir
 }
@@ -111,8 +112,12 @@ Invoke-Csc @(
     "/reference:$easyHookManaged",
     "/reference:$(Join-Path $framework 'System.Core.dll')",
     "/reference:$(Join-Path $framework 'System.Drawing.dll')",
+    "/reference:$(Join-Path $framework 'System.Web.Extensions.dll')",
     "/reference:$(Join-Path $framework 'System.Windows.Forms.dll')",
-    (Join-Path $repoRoot 'src\VdCodecRotator\Program.cs')
+    (Join-Path $repoRoot 'src\VdCodecRotator\Program.cs'),
+    (Join-Path $repoRoot 'src\VdCodecRotator\ManualSettings.cs'),
+    (Join-Path $repoRoot 'src\VdCodecRotator\RawInput.cs'),
+    (Join-Path $repoRoot 'src\VdCodecRotator\ToggleSelectionDialog.cs')
 )
 
 Copy-Item -LiteralPath $easyHookManaged -Destination (Join-Path $distDir 'EasyHook.dll') -Force

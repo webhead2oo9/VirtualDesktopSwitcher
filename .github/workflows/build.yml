@@ -8,12 +8,16 @@ on:
             - ".github/workflows/build.yml"
             - "build.ps1"
             - "test-package.ps1"
+            - "test-manual-features.ps1"
+            - "tests/**"
             - "src/**"
     pull_request:
         paths:
             - ".github/workflows/build.yml"
             - "build.ps1"
             - "test-package.ps1"
+            - "test-manual-features.ps1"
+            - "tests/**"
             - "src/**"
     workflow_dispatch:
 
@@ -35,6 +39,11 @@ jobs:
               shell: powershell
               run: |
                   powershell -NoProfile -ExecutionPolicy Bypass -File .\test-package.ps1
+
+            - name: Test manual trigger features
+              shell: powershell
+              run: |
+                  powershell -NoProfile -ExecutionPolicy Bypass -File .\test-manual-features.ps1
 
             - name: Upload release artifact
               uses: actions/upload-artifact@v7

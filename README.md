@@ -1,8 +1,9 @@
 # VirtualDesktopSwitcher
 
-Automatically switches the **Preferred Codec** in Virtual Desktop Streamer on a
-timer silently, without bringing the Streamer settings window to the
-foreground.
+Automatically or manually switches the **Preferred Codec** in Virtual Desktop
+Streamer without bringing the Streamer settings window to the foreground. A
+global keyboard chord or discrete wheel/controller button can switch codecs or
+restart the stream encoder even while the simulator has focus.
 
 > **Prefer no injection?** A self-contained PowerShell variant that drives the
 > Streamer UI through Windows UI Automation lives on the
@@ -63,8 +64,19 @@ Download a release, unzip it, and run the executable from that folder:
 
 With no codec arguments, it reads the current codec and opens a small popup
 asking which different codec to toggle with, whether to beep before timer
-switches, and how many minutes to wait
-between switches (default `25`, range `1`–`10080`).
+switches, how many minutes to wait between switches (default `25`, range
+`1`–`10080`), and whether to enable a manual trigger.
+
+To configure the manual trigger without starting or requiring Virtual Desktop
+Streamer, run:
+
+```powershell
+.\VirtualDesktopSwitcher.exe --configure-manual
+```
+
+Choose **Bind**, then press one non-modifier keyboard key (optionally with Ctrl,
+Alt, Shift, or Windows) or one discrete wheel/controller button. The setting is
+global: the trigger remains active while another application has focus.
 
 Prefer to build it yourself? See [Building from source](#building-from-source).
 
@@ -95,6 +107,18 @@ Prefer to build it yourself? See [Building from source](#building-from-source).
 # Set one exact codec and exit
 .\VirtualDesktopSwitcher.exe --target-codec HEVC10bit
 
+# Capture/save the global trigger and timer preference, then exit
+.\VirtualDesktopSwitcher.exe --configure-manual
+
+# Wait only for the saved manual binding; do not run the automatic timer
+.\VirtualDesktopSwitcher.exe --codecs HEVC10bit,HEVC --manual-only
+
+# Temporarily override the saved manual action
+.\VirtualDesktopSwitcher.exe --codecs HEVC10bit,HEVC --manual-action switch
+
+# Force the timer on or disable the saved trigger for this run
+.\VirtualDesktopSwitcher.exe --codecs HEVC10bit,HEVC --enable-timer --no-manual-trigger
+
 # Show help
 .\VirtualDesktopSwitcher.exe --help
 ```
@@ -112,6 +136,11 @@ Prefer to build it yourself? See [Building from source](#building-from-source).
 | `--switch-immediately` | Switch immediately before entering the timer loop. |
 | `--switch-back` | Treat the first of exactly two codecs as preferred. At each interval, switch to the second codec, wait for the switch-back delay, and restore the first. The preferred codec is also restored when the tool starts. |
 | `--switch-back-delay-ms <n>` | Milliseconds to stay on the temporary codec before restoring the preferred one. Default `50`, range `0`–`60000`. |
+| `--configure-manual` | Open manual/timer settings, save them, and exit without requiring Streamer. |
+| `--manual-only` | Disable automatic timer switching for this run. Requires a saved binding. |
+| `--enable-timer` | Force automatic timer switching on for this run. |
+| `--manual-action <switch\|restart>` | Override the saved manual action for this run. |
+| `--no-manual-trigger` | Disable the saved manual binding for this run. |
 | `--streamer-path <path>` | Path to `VirtualDesktop.Streamer.exe` (used to launch it if not running). |
 | `--timeout-seconds <n>` | Helper timeout in seconds. Default `15`, range `1`–`300`. |
 
@@ -129,6 +158,53 @@ codec and the second is only used temporarily to reset the stream. For example,
 The interactive popup offers the same behavior: check *Switch back to*, pick
 the codec to keep (it defaults to the current one), and pick the delay in
 milliseconds.
+
+## Manual trigger
+
+Manual settings are stored in the versioned file
+`%LOCALAPPDATA%\VirtualDesktopSwitcher\manual-settings.json`. Updates use an
+atomic file replacement. If the file is missing, malformed, or from an
+unsupported version, the program warns and uses safe defaults: timer enabled,
+manual trigger unbound, **Refresh Codec**, and a `50 ms` refresh delay.
+
+The effective setting order is command-line override, saved setting, then
+default. Runs with an explicit `--codecs` list automatically use the saved
+binding. `--once` and `--target-codec` are one-shot modes and ignore both timer
+and manual settings.
+
+Every manual action counts down `3`, `2`, `1` with one beep per second. If beep
+playback is unavailable, the countdown continues. Press Ctrl+C to cancel it and
+stop normally. Further key repeats or button reports are ignored during the
+countdown and codec operation. A manual trigger that arrives during the
+optional five-second timer warning takes priority; after a successful manual
+action, the automatic interval starts over.
+
+- **Refresh Codec** remembers the exact active codec, switches to the next
+  different codec in the configured rotation, waits the saved refresh delay,
+  and restores the remembered codec. This resets the encoder; it does not exit
+  Virtual Desktop Streamer.
+- **Change Codec** advances through the same configured rotation used by the
+  timer.
+
+### Controller support and troubleshooting
+
+The listener uses Windows Raw Input in background mode and registers keyboard,
+joystick, gamepad, and multi-axis controller collections. HID bindings store
+only the button usage page and usage number, not a vendor, product, or device
+identifier. Consequently, the equivalent reported button on another supported
+controller can activate the same binding.
+
+Only discrete HID buttons can be bound. Axes, pedals, analog paddles, hats that
+are reported solely as axes, and force-feedback data are not supported. If a
+wheel button is not detected, check its driver/control panel to confirm that it
+is exposed as a DirectInput-style button rather than an axis. Re-run
+`--configure-manual` after changing the driver mapping.
+
+If Raw Input cannot initialize, a timer-enabled run logs a warning and
+continues with the timer. A manual-only run exits with a clear error because it
+has no remaining trigger. If the application says both scheduling methods are
+disabled or that manual-only mode has no binding, run `--configure-manual` and
+bind a key/button, or use `--enable-timer`.
 
 ## Building from source
 
@@ -160,11 +236,21 @@ README.md   LICENSE   THIRD-PARTY-NOTICES.md
 
 ```text
 src\VdCodecRotator\Program.cs                     CLI, timer loop, injection client
+src\VdCodecRotator\ManualSettings.cs              JSON settings and configuration UI
+src\VdCodecRotator\RawInput.cs                    background keyboard/HID input
+src\VdCodecRotator\ToggleSelectionDialog.cs       interactive codec and scheduling setup
 src\VdCodecRotator.Payload\PayloadEntryPoint.cs   EasyHook entry point
 src\VdCodecRotator.Worker\StreamerCodecWorker.cs  reads/sets the live setting
 build.ps1                                         builds and packages the release
 test-package.ps1                                  verifies the packaged release
+test-manual-features.ps1                          focused manual-trigger unit tests
 .github\workflows\                                CI build and tagged releases
+```
+
+After building once, run the focused tests with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\test-manual-features.ps1
 ```
 
 ## Notes
