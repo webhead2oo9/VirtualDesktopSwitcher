@@ -238,6 +238,7 @@ README.md   LICENSE   THIRD-PARTY-NOTICES.md
 src\VdCodecRotator\Program.cs                     CLI, timer loop, injection client
 src\VdCodecRotator\ManualSettings.cs              JSON settings and configuration UI
 src\VdCodecRotator\RawInput.cs                    background keyboard/HID input
+src\VdCodecRotator\ToggleSelectionDialog.cs       interactive codec and scheduling setup
 src\VdCodecRotator.Payload\PayloadEntryPoint.cs   EasyHook entry point
 src\VdCodecRotator.Worker\StreamerCodecWorker.cs  reads/sets the live setting
 build.ps1                                         builds and packages the release

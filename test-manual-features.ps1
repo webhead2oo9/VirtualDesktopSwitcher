@@ -31,6 +31,7 @@ try {
         (Join-Path $repoRoot 'src\VdCodecRotator\Program.cs'),
         (Join-Path $repoRoot 'src\VdCodecRotator\ManualSettings.cs'),
         (Join-Path $repoRoot 'src\VdCodecRotator\RawInput.cs'),
+        (Join-Path $repoRoot 'src\VdCodecRotator\ToggleSelectionDialog.cs'),
         (Join-Path $repoRoot 'tests\ManualFeatureTests.cs')
     )
     if ($LASTEXITCODE -ne 0) {

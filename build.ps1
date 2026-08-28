@@ -116,7 +116,8 @@ Invoke-Csc @(
     "/reference:$(Join-Path $framework 'System.Windows.Forms.dll')",
     (Join-Path $repoRoot 'src\VdCodecRotator\Program.cs'),
     (Join-Path $repoRoot 'src\VdCodecRotator\ManualSettings.cs'),
-    (Join-Path $repoRoot 'src\VdCodecRotator\RawInput.cs')
+    (Join-Path $repoRoot 'src\VdCodecRotator\RawInput.cs'),
+    (Join-Path $repoRoot 'src\VdCodecRotator\ToggleSelectionDialog.cs')
 )
 
 Copy-Item -LiteralPath $easyHookManaged -Destination (Join-Path $distDir 'EasyHook.dll') -Force

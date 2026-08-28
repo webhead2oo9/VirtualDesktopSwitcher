@@ -219,81 +219,90 @@ namespace VirtualDesktopSwitcher
         }
     }
 
-    internal static class ManualSettingsConfigurationDialog
+    internal sealed class ManualSettingsEditor : UserControl
     {
-        public static ManualSettings Show(ManualSettings initial)
+        private readonly ManualSettings working;
+        private readonly CheckBox timer;
+        private readonly CheckBox manual;
+        private readonly ComboBox action;
+        private readonly TextBox binding;
+        private readonly Button bind;
+        private readonly Button clear;
+        private readonly NumericUpDown delay;
+
+        public event EventHandler TimerEnabledChanged;
+
+        public ManualSettingsEditor(ManualSettings initial)
         {
-            Application.EnableVisualStyles();
-            ManualSettings working = initial.Clone();
+            working = initial.Clone();
+            Size = new Size(468, 184);
 
-            Form form = new Form();
-            form.Text = "Manual trigger settings";
-            form.StartPosition = FormStartPosition.CenterScreen;
-            form.FormBorderStyle = FormBorderStyle.FixedDialog;
-            form.MaximizeBox = false;
-            form.MinimizeBox = false;
-            form.TopMost = true;
-            form.ClientSize = new Size(500, 245);
+            Label header = new Label();
+            header.AutoSize = true;
+            header.Font = new Font(header.Font, FontStyle.Bold);
+            header.Location = new Point(0, 0);
+            header.Text = "Scheduling and manual trigger";
+            Controls.Add(header);
 
-            CheckBox timer = new CheckBox();
+            timer = new CheckBox();
             timer.AutoSize = true;
-            timer.Location = new Point(16, 18);
+            timer.Location = new Point(0, 30);
             timer.Text = "Enable automatic timer";
             timer.Checked = working.TimerEnabled;
-            form.Controls.Add(timer);
+            Controls.Add(timer);
 
-            CheckBox manual = new CheckBox();
+            manual = new CheckBox();
             manual.AutoSize = true;
-            manual.Location = new Point(16, 50);
+            manual.Location = new Point(0, 60);
             manual.Text = "Enable manual trigger";
             manual.Checked = working.Binding != null && working.Binding.IsValid;
-            form.Controls.Add(manual);
+            Controls.Add(manual);
 
             Label actionLabel = new Label();
             actionLabel.AutoSize = true;
-            actionLabel.Location = new Point(32, 84);
+            actionLabel.Location = new Point(17, 94);
             actionLabel.Text = "Action";
-            form.Controls.Add(actionLabel);
+            Controls.Add(actionLabel);
 
-            ComboBox action = new ComboBox();
+            action = new ComboBox();
             action.DropDownStyle = ComboBoxStyle.DropDownList;
-            action.Location = new Point(112, 80);
+            action.Location = new Point(96, 90);
             action.Size = new Size(170, 24);
             action.Items.Add("Restart stream");
             action.Items.Add("Switch codec");
             action.SelectedIndex = working.GetAction() == ManualAction.Switch ? 1 : 0;
-            form.Controls.Add(action);
+            Controls.Add(action);
 
             Label bindingLabel = new Label();
             bindingLabel.AutoSize = true;
-            bindingLabel.Location = new Point(32, 118);
+            bindingLabel.Location = new Point(17, 128);
             bindingLabel.Text = "Binding";
-            form.Controls.Add(bindingLabel);
+            Controls.Add(bindingLabel);
 
-            TextBox binding = new TextBox();
+            binding = new TextBox();
             binding.ReadOnly = true;
-            binding.Location = new Point(112, 114);
+            binding.Location = new Point(96, 124);
             binding.Size = new Size(210, 24);
             binding.Text = working.Binding == null ? "Not bound" : working.Binding.DisplayText;
-            form.Controls.Add(binding);
+            Controls.Add(binding);
 
-            Button bind = new Button();
-            bind.Location = new Point(330, 112);
+            bind = new Button();
+            bind.Location = new Point(314, 122);
             bind.Size = new Size(68, 27);
             bind.Text = "Bind...";
             bind.Click += delegate
             {
-                ManualBinding captured = RawInputCaptureDialog.Show(form);
+                ManualBinding captured = RawInputCaptureDialog.Show(this);
                 if (captured != null)
                 {
                     working.Binding = captured;
                     binding.Text = captured.DisplayText;
                 }
             };
-            form.Controls.Add(bind);
+            Controls.Add(bind);
 
-            Button clear = new Button();
-            clear.Location = new Point(406, 112);
+            clear = new Button();
+            clear.Location = new Point(390, 122);
             clear.Size = new Size(68, 27);
             clear.Text = "Clear";
             clear.Click += delegate
@@ -301,67 +310,53 @@ namespace VirtualDesktopSwitcher
                 working.Binding = null;
                 binding.Text = "Not bound";
             };
-            form.Controls.Add(clear);
+            Controls.Add(clear);
 
             Label delayLabel = new Label();
             delayLabel.AutoSize = true;
-            delayLabel.Location = new Point(32, 153);
+            delayLabel.Location = new Point(17, 162);
             delayLabel.Text = "Restart delay";
-            form.Controls.Add(delayLabel);
+            Controls.Add(delayLabel);
 
-            NumericUpDown delay = new NumericUpDown();
-            delay.Location = new Point(112, 149);
+            delay = new NumericUpDown();
+            delay.Location = new Point(96, 158);
             delay.Size = new Size(90, 24);
             delay.Minimum = 0;
             delay.Maximum = 60000;
             delay.Value = working.RestartDelayMilliseconds;
-            form.Controls.Add(delay);
+            Controls.Add(delay);
 
             Label delayUnit = new Label();
             delayUnit.AutoSize = true;
-            delayUnit.Location = new Point(210, 153);
+            delayUnit.Location = new Point(194, 162);
             delayUnit.Text = "millisecond(s)";
-            form.Controls.Add(delayUnit);
+            Controls.Add(delayUnit);
 
-            Action refreshEnabled = delegate
+            timer.CheckedChanged += delegate
             {
-                action.Enabled = manual.Checked;
-                binding.Enabled = manual.Checked;
-                bind.Enabled = manual.Checked;
-                clear.Enabled = manual.Checked;
-                delay.Enabled = manual.Checked && action.SelectedIndex == 0;
-            };
-            manual.CheckedChanged += delegate { refreshEnabled(); };
-            action.SelectedIndexChanged += delegate { refreshEnabled(); };
-            refreshEnabled();
-
-            Button ok = new Button();
-            ok.Text = "Save";
-            ok.Location = new Point(318, 198);
-            ok.Size = new Size(75, 28);
-            ok.DialogResult = DialogResult.OK;
-            ok.Click += delegate
-            {
-                if (manual.Checked && (working.Binding == null || !working.Binding.IsValid))
+                EventHandler handler = TimerEnabledChanged;
+                if (handler != null)
                 {
-                    MessageBox.Show(form, "Bind a non-modifier keyboard key/chord or a discrete HID button, or disable the manual trigger.", "VirtualDesktopSwitcher");
-                    form.DialogResult = DialogResult.None;
+                    handler(this, EventArgs.Empty);
                 }
             };
-            form.AcceptButton = ok;
-            form.Controls.Add(ok);
+            manual.CheckedChanged += delegate { RefreshEnabled(); };
+            action.SelectedIndexChanged += delegate { RefreshEnabled(); };
+            RefreshEnabled();
+        }
 
-            Button cancel = new Button();
-            cancel.Text = "Cancel";
-            cancel.Location = new Point(401, 198);
-            cancel.Size = new Size(75, 28);
-            cancel.DialogResult = DialogResult.Cancel;
-            form.CancelButton = cancel;
-            form.Controls.Add(cancel);
+        public bool TimerEnabled
+        {
+            get { return timer.Checked; }
+        }
 
-            if (form.ShowDialog() != DialogResult.OK)
+        public bool TryCreateSettings(IWin32Window owner, out ManualSettings settings)
+        {
+            settings = null;
+            if (manual.Checked && (working.Binding == null || !working.Binding.IsValid))
             {
-                throw new InvalidOperationException("Manual trigger configuration cancelled.");
+                MessageBox.Show(owner, "Bind a non-modifier keyboard key/chord or a discrete HID button, or disable the manual trigger.", "VirtualDesktopSwitcher");
+                return false;
             }
 
             working.Version = ManualSettings.CurrentVersion;
@@ -372,7 +367,69 @@ namespace VirtualDesktopSwitcher
             }
             working.Action = action.SelectedIndex == 1 ? "switch" : "restart";
             working.RestartDelayMilliseconds = (int)delay.Value;
-            return working;
+            settings = working.Clone();
+            return true;
+        }
+
+        private void RefreshEnabled()
+        {
+            action.Enabled = manual.Checked;
+            binding.Enabled = manual.Checked;
+            bind.Enabled = manual.Checked;
+            clear.Enabled = manual.Checked;
+            delay.Enabled = manual.Checked && action.SelectedIndex == 0;
+        }
+    }
+
+    internal static class ManualSettingsConfigurationDialog
+    {
+        public static ManualSettings Show(ManualSettings initial)
+        {
+            Application.EnableVisualStyles();
+
+            Form form = new Form();
+            form.Text = "Manual trigger settings";
+            form.StartPosition = FormStartPosition.CenterScreen;
+            form.FormBorderStyle = FormBorderStyle.FixedDialog;
+            form.MaximizeBox = false;
+            form.MinimizeBox = false;
+            form.TopMost = true;
+            form.ClientSize = new Size(500, 280);
+
+            ManualSettingsEditor editor = new ManualSettingsEditor(initial);
+            editor.Location = new Point(16, 16);
+            form.Controls.Add(editor);
+
+            ManualSettings result = null;
+
+            Button ok = new Button();
+            ok.Text = "Save";
+            ok.Location = new Point(318, 235);
+            ok.Size = new Size(75, 28);
+            ok.DialogResult = DialogResult.OK;
+            ok.Click += delegate
+            {
+                if (!editor.TryCreateSettings(form, out result))
+                {
+                    form.DialogResult = DialogResult.None;
+                }
+            };
+            form.AcceptButton = ok;
+            form.Controls.Add(ok);
+
+            Button cancel = new Button();
+            cancel.Text = "Cancel";
+            cancel.Location = new Point(401, 235);
+            cancel.Size = new Size(75, 28);
+            cancel.DialogResult = DialogResult.Cancel;
+            form.CancelButton = cancel;
+            form.Controls.Add(cancel);
+
+            if (form.ShowDialog() != DialogResult.OK)
+            {
+                throw new InvalidOperationException("Manual trigger configuration cancelled.");
+            }
+            return result;
         }
     }
 }
