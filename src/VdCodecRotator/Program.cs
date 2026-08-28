@@ -134,7 +134,7 @@ namespace VirtualDesktopSwitcher
                 Log("VirtualDesktopSwitcher started. Backend: in-process; Codecs: " +
                     string.Join(", ", codecs.Select(c => c.Code).ToArray()) +
                     "; timer: " + (options.TimerEnabled ? "on (" + options.IntervalMinutes + " minute(s))" : "off") +
-                    "; manual trigger: " + (options.ManualEnabled ? "on (" + options.ManualBinding.DisplayText + ", " + options.ManualAction.ToString().ToLowerInvariant() + ")" : "off") +
+                    "; manual trigger: " + (options.ManualEnabled ? "on (" + options.ManualBinding.DisplayText + ", " + GetManualActionDisplayName(options.ManualAction) + ")" : "off") +
                     "; beep warning: " + (options.BeepWarning ? "on" : "off") +
                     "; switch back: " + (options.SwitchBack ? "on (delay " + options.SwitchBackDelayMilliseconds + " ms)" : "off") + ".");
 
@@ -213,6 +213,11 @@ namespace VirtualDesktopSwitcher
 
             Log("Stopped by user.");
             return 0;
+        }
+
+        private static string GetManualActionDisplayName(ManualAction action)
+        {
+            return action == ManualAction.Switch ? "change codec" : "refresh codec";
         }
 
         internal void InitializeScheduledRun(List<CodecInfo> codecs)

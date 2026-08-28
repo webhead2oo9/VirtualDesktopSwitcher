@@ -165,7 +165,7 @@ Manual settings are stored in the versioned file
 `%LOCALAPPDATA%\VirtualDesktopSwitcher\manual-settings.json`. Updates use an
 atomic file replacement. If the file is missing, malformed, or from an
 unsupported version, the program warns and uses safe defaults: timer enabled,
-manual trigger unbound, **Restart stream**, and a `50 ms` restart delay.
+manual trigger unbound, **Refresh Codec**, and a `50 ms` refresh delay.
 
 The effective setting order is command-line override, saved setting, then
 default. Runs with an explicit `--codecs` list automatically use the saved
@@ -179,11 +179,11 @@ countdown and codec operation. A manual trigger that arrives during the
 optional five-second timer warning takes priority; after a successful manual
 action, the automatic interval starts over.
 
-- **Restart stream** remembers the exact active codec, switches to the next
-  different codec in the configured rotation, waits the saved restart delay,
+- **Refresh Codec** remembers the exact active codec, switches to the next
+  different codec in the configured rotation, waits the saved refresh delay,
   and restores the remembered codec. This resets the encoder; it does not exit
   Virtual Desktop Streamer.
-- **Switch codec** advances through the same configured rotation used by the
+- **Change Codec** advances through the same configured rotation used by the
   timer.
 
 ### Controller support and troubleshooting

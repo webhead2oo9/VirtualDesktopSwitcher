@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
 
 namespace VirtualDesktopSwitcher.Tests
 {
@@ -18,6 +19,7 @@ namespace VirtualDesktopSwitcher.Tests
             {
                 TestSettings(root);
                 TestOptionsPrecedence();
+                TestActionLabels();
                 TestKeyboardTransitions();
                 TestHidTransitions();
                 TestCodecActions();
@@ -90,6 +92,22 @@ namespace VirtualDesktopSwitcher.Tests
             Assert(!options.TimerEnabled && !options.ManualEnabled, "CLI can disable both for validation to reject");
 
             AssertThrows(delegate { Options.Parse(new[] { "--manual-action", "invalid" }); }, "invalid manual action is rejected");
+        }
+
+        private static void TestActionLabels()
+        {
+            using (ManualSettingsEditor editor = new ManualSettingsEditor(ManualSettings.CreateDefault()))
+            {
+                ComboBox action = editor.Controls.OfType<ComboBox>().Single();
+                Label description = editor.Controls.OfType<Label>().Single(label => !label.AutoSize);
+
+                Assert(action.Items.Cast<string>().SequenceEqual(new[] { "Refresh Codec", "Change Codec" }), "manual action labels are clear");
+                Assert(description.Text == "Switches away briefly, then restores the original codec.", "refresh action description is shown");
+
+                action.SelectedIndex = 1;
+                Assert(description.Text == "Changes codec and does not restore the original codec.", "change action description is shown");
+                Assert(editor.Controls.OfType<Label>().Any(label => label.Text == "Refresh delay"), "refresh delay uses matching terminology");
+            }
         }
 
         private static void TestKeyboardTransitions()

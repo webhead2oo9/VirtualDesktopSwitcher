@@ -225,6 +225,7 @@ namespace VirtualDesktopSwitcher
         private readonly CheckBox timer;
         private readonly CheckBox manual;
         private readonly ComboBox action;
+        private readonly Label actionDescription;
         private readonly TextBox binding;
         private readonly Button bind;
         private readonly Button clear;
@@ -268,10 +269,18 @@ namespace VirtualDesktopSwitcher
             action.DropDownStyle = ComboBoxStyle.DropDownList;
             action.Location = new Point(96, 90);
             action.Size = new Size(170, 24);
-            action.Items.Add("Restart stream");
-            action.Items.Add("Switch codec");
+            action.Items.Add("Refresh Codec");
+            action.Items.Add("Change Codec");
             action.SelectedIndex = working.GetAction() == ManualAction.Switch ? 1 : 0;
             Controls.Add(action);
+
+            actionDescription = new Label();
+            actionDescription.AutoSize = false;
+            actionDescription.ForeColor = SystemColors.GrayText;
+            actionDescription.Location = new Point(276, 88);
+            actionDescription.Size = new Size(182, 36);
+            actionDescription.TextAlign = ContentAlignment.MiddleLeft;
+            Controls.Add(actionDescription);
 
             Label bindingLabel = new Label();
             bindingLabel.AutoSize = true;
@@ -315,7 +324,7 @@ namespace VirtualDesktopSwitcher
             Label delayLabel = new Label();
             delayLabel.AutoSize = true;
             delayLabel.Location = new Point(17, 162);
-            delayLabel.Text = "Restart delay";
+            delayLabel.Text = "Refresh delay";
             Controls.Add(delayLabel);
 
             delay = new NumericUpDown();
@@ -374,6 +383,10 @@ namespace VirtualDesktopSwitcher
         private void RefreshEnabled()
         {
             action.Enabled = manual.Checked;
+            actionDescription.Enabled = manual.Checked;
+            actionDescription.Text = action.SelectedIndex == 1
+                ? "Changes codec and does not restore the original codec."
+                : "Switches away briefly, then restores the original codec.";
             binding.Enabled = manual.Checked;
             bind.Enabled = manual.Checked;
             clear.Enabled = manual.Checked;
