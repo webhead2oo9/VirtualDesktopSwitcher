@@ -167,6 +167,11 @@ jobs:
               run: |
                   powershell -NoProfile -ExecutionPolicy Bypass -File .\test-package.ps1
 
+            - name: Test manual trigger features
+              shell: powershell
+              run: |
+                  powershell -NoProfile -ExecutionPolicy Bypass -File .\test-manual-features.ps1
+
             - name: Publish GitHub Release
               shell: powershell
               env:

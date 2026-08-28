@@ -14,6 +14,7 @@ namespace VirtualDesktopSwitcher
 {
     internal static class Program
     {
+        [STAThread]
         private static int Main(string[] args)
         {
             try
@@ -22,6 +23,20 @@ namespace VirtualDesktopSwitcher
                 if (options.ShowHelp)
                 {
                     Usage.Print();
+                    return 0;
+                }
+
+                if (options.ConfigureManual)
+                {
+                    string warning;
+                    ManualSettings settings = ManualSettingsStore.Load(out warning);
+                    if (!string.IsNullOrEmpty(warning))
+                    {
+                        Console.Error.WriteLine("WARNING: " + warning);
+                    }
+                    settings = ManualSettingsConfigurationDialog.Show(settings);
+                    ManualSettingsStore.Save(settings);
+                    Console.WriteLine("Saved manual settings to " + ManualSettingsStore.SettingsPath);
                     return 0;
                 }
 
@@ -42,14 +57,21 @@ namespace VirtualDesktopSwitcher
     internal sealed class Rotator
     {
         private readonly Options options;
-        private readonly CodecInjectionClient client;
+        private readonly ICodecClient client;
         private readonly ManualResetEvent cancelSignal = new ManualResetEvent(false);
         private volatile bool cancelRequested;
+        private RawInputListener manualInput;
+        private ManualSettings savedManualSettings;
 
         public Rotator(Options options)
+            : this(options, new CodecInjectionClient(options))
+        {
+        }
+
+        internal Rotator(Options options, ICodecClient client)
         {
             this.options = options;
-            this.client = new CodecInjectionClient(options);
+            this.client = client;
         }
 
         public int Run()
@@ -73,6 +95,17 @@ namespace VirtualDesktopSwitcher
                 return 0;
             }
 
+            if (!options.Once)
+            {
+                string warning;
+                savedManualSettings = ManualSettingsStore.Load(out warning);
+                if (!string.IsNullOrEmpty(warning))
+                {
+                    Log("WARNING: " + warning);
+                }
+                options.ApplyManualSettings(savedManualSettings);
+            }
+
             List<CodecInfo> codecs = ResolveCodecRotation();
             if (options.SwitchBack && codecs.Count != 2)
             {
@@ -90,33 +123,126 @@ namespace VirtualDesktopSwitcher
                 return 0;
             }
 
+            ValidateScheduledRun();
+            StartManualInput();
+
             Log("VirtualDesktopSwitcher started. Backend: in-process; Codecs: " +
                 string.Join(", ", codecs.Select(c => c.Code).ToArray()) +
-                "; interval: " + options.IntervalMinutes + " minute(s)" +
+                "; timer: " + (options.TimerEnabled ? "on (" + options.IntervalMinutes + " minute(s))" : "off") +
+                "; manual trigger: " + (options.ManualEnabled ? "on (" + options.ManualBinding.DisplayText + ", " + options.ManualAction.ToString().ToLowerInvariant() + ")" : "off") +
                 "; beep warning: " + (options.BeepWarning ? "on" : "off") +
                 "; switch back: " + (options.SwitchBack ? "on (delay " + options.SwitchBackDelayMilliseconds + " ms)" : "off") + ".");
 
-            if (options.SwitchImmediately)
+            try
             {
-                PerformSwitch(codecs);
-            }
-
-            while (true)
-            {
-                if (!WaitForNextSwitch())
+                if (options.SwitchImmediately)
                 {
-                    break;
+                    PerformAutomaticSwitch(codecs);
                 }
 
-                PerformSwitch(codecs);
-                if (cancelRequested)
+                DateTime nextTimerDeadline = DateTime.UtcNow.AddMinutes(options.IntervalMinutes);
+                while (true)
                 {
-                    break;
+                    WorkKind work = WaitForWork(nextTimerDeadline);
+                    if (work == WorkKind.Cancel)
+                    {
+                        break;
+                    }
+
+                    bool automaticInputSuppressed = false;
+                    if (work == WorkKind.Timer && manualInput != null)
+                    {
+                        automaticInputSuppressed = manualInput.TryBeginAutomaticOperation();
+                        if (!automaticInputSuppressed)
+                        {
+                            work = WorkKind.Manual;
+                        }
+                    }
+
+                    if (work == WorkKind.Manual)
+                    {
+                        manualInput.ConsumeTrigger();
+                        manualInput.SetEnabled(false);
+                        try
+                        {
+                            if (!ManualCountdown())
+                            {
+                                break;
+                            }
+                            PerformManualAction(codecs);
+                            nextTimerDeadline = DateTime.UtcNow.AddMinutes(options.IntervalMinutes);
+                        }
+                        finally
+                        {
+                            manualInput.SetEnabled(true);
+                        }
+                    }
+                    else
+                    {
+                        try
+                        {
+                            PerformSwitch(codecs);
+                        }
+                        finally
+                        {
+                            if (automaticInputSuppressed)
+                            {
+                                manualInput.SetEnabled(true);
+                            }
+                        }
+                        nextTimerDeadline = DateTime.UtcNow.AddMinutes(options.IntervalMinutes);
+                    }
+
+                    if (cancelRequested)
+                    {
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                if (manualInput != null)
+                {
+                    manualInput.Dispose();
+                    manualInput = null;
                 }
             }
 
             Log("Stopped by user.");
             return 0;
+        }
+
+        private void ValidateScheduledRun()
+        {
+            if (!options.TimerEnabled && (options.ManualBinding == null || !options.ManualBinding.IsValid))
+            {
+                throw new InvalidOperationException("Manual-only mode requires a saved binding. Run --configure-manual first.");
+            }
+            if (!options.TimerEnabled && !options.ManualEnabled)
+            {
+                throw new InvalidOperationException("Both the automatic timer and manual trigger are disabled. Run --configure-manual to enable and bind a trigger.");
+            }
+        }
+
+        private void StartManualInput()
+        {
+            if (!options.ManualEnabled)
+            {
+                return;
+            }
+            try
+            {
+                manualInput = new RawInputListener(options.ManualBinding);
+            }
+            catch (Exception ex)
+            {
+                if (!options.TimerEnabled)
+                {
+                    throw new InvalidOperationException("Manual-only mode could not start Raw Input. " + ex.Message, ex);
+                }
+                options.ManualEnabled = false;
+                Log("WARNING: manual trigger unavailable; continuing in timer mode (" + ex.Message + ").");
+            }
         }
 
         private void PerformSwitch(List<CodecInfo> codecs)
@@ -128,6 +254,37 @@ namespace VirtualDesktopSwitcher
             }
 
             SwitchToNextCodec(codecs);
+        }
+
+        private void PerformAutomaticSwitch(List<CodecInfo> codecs)
+        {
+            if (manualInput == null)
+            {
+                PerformSwitch(codecs);
+                return;
+            }
+            manualInput.SetEnabled(false);
+            try
+            {
+                PerformSwitch(codecs);
+            }
+            finally
+            {
+                manualInput.SetEnabled(true);
+            }
+        }
+
+        internal void PerformManualAction(List<CodecInfo> codecs)
+        {
+            if (options.ManualAction == ManualAction.Switch)
+            {
+                SwitchToNextCodec(codecs);
+                return;
+            }
+
+            CodecOperationResult snapshot = client.GetCodec();
+            CodecInfo temporary = GetNextCodec(snapshot.Current, codecs);
+            SwitchAwayAndRestore(snapshot.Current, temporary);
         }
 
         private void EnsurePreferredCodec(CodecInfo preferred)
@@ -183,43 +340,115 @@ namespace VirtualDesktopSwitcher
             }
         }
 
-        private bool WaitForNextSwitch()
+        private void SwitchAwayAndRestore(string originalCodec, CodecInfo temporary)
         {
-            TimeSpan interval = TimeSpan.FromMinutes(options.IntervalMinutes);
-            TimeSpan warning = TimeSpan.FromSeconds(5);
-
-            if (!options.BeepWarning)
+            try
             {
-                return !cancelSignal.WaitOne(interval);
-            }
-
-            if (interval > warning)
-            {
-                if (cancelSignal.WaitOne(interval - warning))
+                CodecOperationResult awayResult = client.SetCodec(temporary.Code);
+                Log("Preferred Codec: " + awayResult.Before + " -> " + awayResult.After + " (manual restart temporary)");
+                if (options.ManualRestartDelayMilliseconds > 0)
                 {
-                    return false;
+                    cancelSignal.WaitOne(options.ManualRestartDelayMilliseconds);
                 }
-                return BeepBeforeSwitch((int)warning.TotalSeconds);
+            }
+            catch
+            {
+                TryRestoreAfterFailure(originalCodec);
+                throw;
             }
 
-            return !cancelSignal.WaitOne(interval);
+            CodecOperationResult restoreResult = RestoreCodec(originalCodec);
+            Log("Preferred Codec: " + restoreResult.Before + " -> " + restoreResult.After + " (manual restart restored)");
         }
 
-        private bool BeepBeforeSwitch(int seconds)
+        private void TryRestoreAfterFailure(string codec)
         {
-            Log("Switching codec in " + seconds + " second(s).");
+            try
+            {
+                client.SetCodec(codec);
+            }
+            catch (Exception restoreEx)
+            {
+                Log("WARNING: could not restore original codec '" + codec + "' (" + restoreEx.Message + ").");
+            }
+        }
 
-            for (int remaining = seconds; remaining > 0; remaining--)
+        private CodecOperationResult RestoreCodec(string codec)
+        {
+            try
+            {
+                return client.SetCodec(codec);
+            }
+            catch (Exception ex)
+            {
+                Log("WARNING: could not restore original codec '" + codec + "' (" + ex.Message + "); retrying once.");
+                return client.SetCodec(codec);
+            }
+        }
+
+        private WorkKind WaitForWork(DateTime timerDeadline)
+        {
+            TimeSpan warning = TimeSpan.FromSeconds(5);
+            WaitHandle[] handles = manualInput == null
+                ? new WaitHandle[] { cancelSignal }
+                : new WaitHandle[] { cancelSignal, manualInput.TriggerSignal };
+
+            if (!options.TimerEnabled)
+            {
+                int signal = WaitHandle.WaitAny(handles);
+                return signal == 0 ? WorkKind.Cancel : WorkKind.Manual;
+            }
+
+            DateTime warningDeadline = options.BeepWarning ? timerDeadline.Subtract(warning) : timerDeadline;
+            int waitMilliseconds = MillisecondsUntil(warningDeadline);
+            int result = WaitHandle.WaitAny(handles, waitMilliseconds);
+            if (result == 0)
+            {
+                return WorkKind.Cancel;
+            }
+            if (result == 1)
+            {
+                return WorkKind.Manual;
+            }
+
+            if (!options.BeepWarning || DateTime.UtcNow >= timerDeadline)
+            {
+                return WorkKind.Timer;
+            }
+
+            Log("Switching codec in 5 second(s).");
+            for (int remaining = 5; remaining > 0; remaining--)
             {
                 Stopwatch tick = Stopwatch.StartNew();
-                try
-                {
-                    Console.Beep(1200, 160);
-                }
-                catch
-                {
-                    // Beep support depends on the active Windows audio/session setup.
-                }
+                PlayBeep();
+                int remainingMilliseconds = Math.Max(0, 1000 - (int)tick.ElapsedMilliseconds);
+                result = WaitHandle.WaitAny(handles, remainingMilliseconds);
+                if (result == 0) return WorkKind.Cancel;
+                if (result == 1) return WorkKind.Manual;
+            }
+
+            if (manualInput != null && manualInput.TriggerSignal.WaitOne(0))
+            {
+                return WorkKind.Manual;
+            }
+            return WorkKind.Timer;
+        }
+
+        private static int MillisecondsUntil(DateTime deadline)
+        {
+            double milliseconds = (deadline - DateTime.UtcNow).TotalMilliseconds;
+            if (milliseconds <= 0) return 0;
+            if (milliseconds >= int.MaxValue) return int.MaxValue;
+            return (int)Math.Ceiling(milliseconds);
+        }
+
+        private bool ManualCountdown()
+        {
+            for (int remaining = 3; remaining > 0; remaining--)
+            {
+                Stopwatch tick = Stopwatch.StartNew();
+                Log("Manual action in " + remaining + ".");
+                PlayBeep();
 
                 int remainingMilliseconds = Math.Max(0, 1000 - (int)tick.ElapsedMilliseconds);
                 if (cancelSignal.WaitOne(remainingMilliseconds))
@@ -229,6 +458,25 @@ namespace VirtualDesktopSwitcher
             }
 
             return true;
+        }
+
+        private static void PlayBeep()
+        {
+            try
+            {
+                Console.Beep(1200, 160);
+            }
+            catch
+            {
+                // Beep support depends on the active Windows audio/session setup.
+            }
+        }
+
+        private enum WorkKind
+        {
+            Cancel,
+            Manual,
+            Timer
         }
 
         private List<CodecInfo> ResolveCodecRotation()
@@ -245,11 +493,17 @@ namespace VirtualDesktopSwitcher
 
             CodecOperationResult current = client.GetCodec();
             CodecInfo currentCodec = CodecCatalog.Resolve(current.Current);
-            ToggleSelection selection = ToggleSelectionDialog.Show(currentCodec, options.IntervalMinutes, options.BeepWarning, options.SwitchBack, options.SwitchBackDelayMilliseconds);
+            ToggleSelection selection = ToggleSelectionDialog.Show(currentCodec, options.IntervalMinutes, options.BeepWarning, options.SwitchBack, options.SwitchBackDelayMilliseconds, options.Once ? null : savedManualSettings);
             options.IntervalMinutes = selection.IntervalMinutes;
             options.BeepWarning = selection.BeepWarning;
             options.SwitchBack = selection.SwitchBack;
             options.SwitchBackDelayMilliseconds = selection.SwitchBackDelayMilliseconds;
+            if (!options.Once && selection.ManualSettings != null)
+            {
+                ManualSettingsStore.Save(selection.ManualSettings);
+                savedManualSettings = selection.ManualSettings;
+                options.ApplyManualSettings(savedManualSettings);
+            }
 
             CodecInfo first = selection.SwitchBack ? selection.SwitchBackCodec : currentCodec;
 
@@ -260,7 +514,7 @@ namespace VirtualDesktopSwitcher
             return new List<CodecInfo> { first, selection.Codec };
         }
 
-        private void SwitchToNextCodec(List<CodecInfo> codecs)
+        internal void SwitchToNextCodec(List<CodecInfo> codecs)
         {
             CodecOperationResult current = client.GetCodec();
             CodecInfo next = GetNextCodec(current.Current, codecs);
@@ -268,7 +522,7 @@ namespace VirtualDesktopSwitcher
             Log("Preferred Codec: " + result.Before + " -> " + result.After);
         }
 
-        private static CodecInfo GetNextCodec(string currentCodec, List<CodecInfo> codecs)
+        internal static CodecInfo GetNextCodec(string currentCodec, List<CodecInfo> codecs)
         {
             int index = -1;
             for (int i = 0; i < codecs.Count; i++)
@@ -295,7 +549,13 @@ namespace VirtualDesktopSwitcher
         }
     }
 
-    internal sealed class CodecInjectionClient
+    internal interface ICodecClient
+    {
+        CodecOperationResult GetCodec();
+        CodecOperationResult SetCodec(string codec);
+    }
+
+    internal sealed class CodecInjectionClient : ICodecClient
     {
         private readonly Options options;
         private readonly string baseDirectory;
@@ -488,11 +748,12 @@ namespace VirtualDesktopSwitcher
         public bool SwitchBack;
         public CodecInfo SwitchBackCodec;
         public int SwitchBackDelayMilliseconds;
+        public ManualSettings ManualSettings;
     }
 
     internal static class ToggleSelectionDialog
     {
-        public static ToggleSelection Show(CodecInfo currentCodec, int initialIntervalMinutes, bool initialBeepWarning, bool initialSwitchBack, int initialSwitchBackDelayMilliseconds)
+        public static ToggleSelection Show(CodecInfo currentCodec, int initialIntervalMinutes, bool initialBeepWarning, bool initialSwitchBack, int initialSwitchBackDelayMilliseconds, ManualSettings manualSettings)
         {
             Application.EnableVisualStyles();
 
@@ -508,7 +769,9 @@ namespace VirtualDesktopSwitcher
             form.MinimizeBox = false;
             form.ShowInTaskbar = true;
             form.TopMost = true;
-            form.ClientSize = new Size(420, 290);
+            bool configureManual = manualSettings != null;
+            ManualSettings workingManual = configureManual ? manualSettings.Clone() : null;
+            form.ClientSize = new Size(configureManual ? 500 : 420, configureManual ? 475 : 290);
 
             Label label = new Label();
             label.AutoSize = false;
@@ -620,9 +883,128 @@ namespace VirtualDesktopSwitcher
                 }
             };
 
+            CheckBox timerEnabledInput = null;
+            CheckBox manualEnabledInput = null;
+            ComboBox manualActionInput = null;
+            TextBox bindingInput = null;
+            NumericUpDown manualDelayInput = null;
+
+            if (configureManual)
+            {
+                Label manualHeader = new Label();
+                manualHeader.AutoSize = true;
+                manualHeader.Font = new Font(manualHeader.Font, FontStyle.Bold);
+                manualHeader.Location = new Point(16, 248);
+                manualHeader.Text = "Scheduling and manual trigger";
+                form.Controls.Add(manualHeader);
+
+                timerEnabledInput = new CheckBox();
+                timerEnabledInput.AutoSize = true;
+                timerEnabledInput.Location = new Point(16, 278);
+                timerEnabledInput.Text = "Enable automatic timer";
+                timerEnabledInput.Checked = workingManual.TimerEnabled;
+                form.Controls.Add(timerEnabledInput);
+
+                manualEnabledInput = new CheckBox();
+                manualEnabledInput.AutoSize = true;
+                manualEnabledInput.Location = new Point(16, 308);
+                manualEnabledInput.Text = "Enable manual trigger";
+                manualEnabledInput.Checked = workingManual.Binding != null && workingManual.Binding.IsValid;
+                form.Controls.Add(manualEnabledInput);
+
+                Label actionLabel = new Label();
+                actionLabel.AutoSize = true;
+                actionLabel.Location = new Point(33, 342);
+                actionLabel.Text = "Action";
+                form.Controls.Add(actionLabel);
+
+                manualActionInput = new ComboBox();
+                manualActionInput.DropDownStyle = ComboBoxStyle.DropDownList;
+                manualActionInput.Location = new Point(112, 338);
+                manualActionInput.Size = new Size(170, 24);
+                manualActionInput.Items.Add("Restart stream");
+                manualActionInput.Items.Add("Switch codec");
+                manualActionInput.SelectedIndex = workingManual.GetAction() == ManualAction.Switch ? 1 : 0;
+                form.Controls.Add(manualActionInput);
+
+                Label bindingLabel = new Label();
+                bindingLabel.AutoSize = true;
+                bindingLabel.Location = new Point(33, 376);
+                bindingLabel.Text = "Binding";
+                form.Controls.Add(bindingLabel);
+
+                bindingInput = new TextBox();
+                bindingInput.ReadOnly = true;
+                bindingInput.Location = new Point(112, 372);
+                bindingInput.Size = new Size(210, 24);
+                bindingInput.Text = workingManual.Binding == null ? "Not bound" : workingManual.Binding.DisplayText;
+                form.Controls.Add(bindingInput);
+
+                Button bindButton = new Button();
+                bindButton.Location = new Point(330, 370);
+                bindButton.Size = new Size(68, 27);
+                bindButton.Text = "Bind...";
+                bindButton.Click += delegate
+                {
+                    ManualBinding captured = RawInputCaptureDialog.Show(form);
+                    if (captured != null)
+                    {
+                        workingManual.Binding = captured;
+                        bindingInput.Text = captured.DisplayText;
+                    }
+                };
+                form.Controls.Add(bindButton);
+
+                Button clearButton = new Button();
+                clearButton.Location = new Point(406, 370);
+                clearButton.Size = new Size(68, 27);
+                clearButton.Text = "Clear";
+                clearButton.Click += delegate
+                {
+                    workingManual.Binding = null;
+                    bindingInput.Text = "Not bound";
+                };
+                form.Controls.Add(clearButton);
+
+                Label delayLabel = new Label();
+                delayLabel.AutoSize = true;
+                delayLabel.Location = new Point(33, 410);
+                delayLabel.Text = "Restart delay";
+                form.Controls.Add(delayLabel);
+
+                manualDelayInput = new NumericUpDown();
+                manualDelayInput.Location = new Point(112, 406);
+                manualDelayInput.Size = new Size(90, 24);
+                manualDelayInput.Minimum = 0;
+                manualDelayInput.Maximum = 60000;
+                manualDelayInput.Value = workingManual.RestartDelayMilliseconds;
+                form.Controls.Add(manualDelayInput);
+
+                Label delayUnit = new Label();
+                delayUnit.AutoSize = true;
+                delayUnit.Location = new Point(210, 410);
+                delayUnit.Text = "millisecond(s)";
+                form.Controls.Add(delayUnit);
+
+                Action refresh = delegate
+                {
+                    intervalInput.Enabled = timerEnabledInput.Checked;
+                    beepWarningInput.Enabled = timerEnabledInput.Checked;
+                    manualActionInput.Enabled = manualEnabledInput.Checked;
+                    bindingInput.Enabled = manualEnabledInput.Checked;
+                    bindButton.Enabled = manualEnabledInput.Checked;
+                    clearButton.Enabled = manualEnabledInput.Checked;
+                    manualDelayInput.Enabled = manualEnabledInput.Checked && manualActionInput.SelectedIndex == 0;
+                };
+                timerEnabledInput.CheckedChanged += delegate { refresh(); };
+                manualEnabledInput.CheckedChanged += delegate { refresh(); };
+                manualActionInput.SelectedIndexChanged += delegate { refresh(); };
+                refresh();
+            }
+
             Button okButton = new Button();
             okButton.Text = "OK";
-            okButton.Location = new Point(248, 244);
+            okButton.Location = new Point(configureManual ? 328 : 248, configureManual ? 438 : 244);
             okButton.Size = new Size(75, 28);
             okButton.DialogResult = DialogResult.OK;
             okButton.Click += delegate
@@ -633,13 +1015,18 @@ namespace VirtualDesktopSwitcher
                     MessageBox.Show(form, "The switch-back codec must be different from the toggle codec.", "VirtualDesktopSwitcher");
                     form.DialogResult = DialogResult.None;
                 }
+                else if (configureManual && manualEnabledInput.Checked && (workingManual.Binding == null || !workingManual.Binding.IsValid))
+                {
+                    MessageBox.Show(form, "Bind a non-modifier keyboard key/chord or a discrete HID button, or disable the manual trigger.", "VirtualDesktopSwitcher");
+                    form.DialogResult = DialogResult.None;
+                }
             };
             form.AcceptButton = okButton;
             form.Controls.Add(okButton);
 
             Button cancelButton = new Button();
             cancelButton.Text = "Cancel";
-            cancelButton.Location = new Point(329, 244);
+            cancelButton.Location = new Point(configureManual ? 409 : 329, configureManual ? 438 : 244);
             cancelButton.Size = new Size(75, 28);
             cancelButton.DialogResult = DialogResult.Cancel;
             form.CancelButton = cancelButton;
@@ -651,6 +1038,17 @@ namespace VirtualDesktopSwitcher
             }
 
             CodecOption selected = (CodecOption)combo.SelectedItem;
+            if (configureManual)
+            {
+                workingManual.Version = ManualSettings.CurrentVersion;
+                workingManual.TimerEnabled = timerEnabledInput.Checked;
+                if (!manualEnabledInput.Checked)
+                {
+                    workingManual.Binding = null;
+                }
+                workingManual.Action = manualActionInput.SelectedIndex == 1 ? "switch" : "restart";
+                workingManual.RestartDelayMilliseconds = (int)manualDelayInput.Value;
+            }
             return new ToggleSelection
             {
                 Codec = selected.Codec,
@@ -658,7 +1056,8 @@ namespace VirtualDesktopSwitcher
                 BeepWarning = beepWarningInput.Checked,
                 SwitchBack = switchBackInput.Checked,
                 SwitchBackCodec = ((CodecOption)switchBackCombo.SelectedItem).Codec,
-                SwitchBackDelayMilliseconds = (int)switchBackDelayInput.Value
+                SwitchBackDelayMilliseconds = (int)switchBackDelayInput.Value,
+                ManualSettings = workingManual
             };
         }
 
@@ -825,6 +1224,15 @@ namespace VirtualDesktopSwitcher
         public bool SwitchImmediately;
         public bool SwitchBack;
         public int SwitchBackDelayMilliseconds = 50;
+        public bool ConfigureManual;
+        public bool? TimerEnabledOverride;
+        public bool NoManualTrigger;
+        public ManualAction? ManualActionOverride;
+        public bool TimerEnabled = true;
+        public bool ManualEnabled;
+        public ManualBinding ManualBinding;
+        public ManualAction ManualAction = ManualAction.Restart;
+        public int ManualRestartDelayMilliseconds = 50;
         public bool ShowHelp;
         public string StreamerPath = @"C:\Program Files\Virtual Desktop Streamer\VirtualDesktop.Streamer.exe";
         public int TimeoutSeconds = 15;
@@ -879,6 +1287,33 @@ namespace VirtualDesktopSwitcher
                         options.SwitchBackDelayMilliseconds = ParseRange(RequireValue(args, ref i, args[i]), "SwitchBackDelayMs", 0, 60000);
                         switchBackDelaySpecified = true;
                         break;
+                    case "CONFIGUREMANUAL":
+                        options.ConfigureManual = true;
+                        break;
+                    case "MANUALONLY":
+                        options.TimerEnabledOverride = false;
+                        break;
+                    case "ENABLETIMER":
+                        options.TimerEnabledOverride = true;
+                        break;
+                    case "MANUALACTION":
+                        string action = RequireValue(args, ref i, args[i]);
+                        if (string.Equals(action, "switch", StringComparison.OrdinalIgnoreCase))
+                        {
+                            options.ManualActionOverride = ManualAction.Switch;
+                        }
+                        else if (string.Equals(action, "restart", StringComparison.OrdinalIgnoreCase))
+                        {
+                            options.ManualActionOverride = ManualAction.Restart;
+                        }
+                        else
+                        {
+                            throw new InvalidOperationException("--manual-action must be 'switch' or 'restart'.");
+                        }
+                        break;
+                    case "NOMANUALTRIGGER":
+                        options.NoManualTrigger = true;
+                        break;
                     case "STREAMERPATH":
                         options.StreamerPath = RequireValue(args, ref i, args[i]);
                         break;
@@ -907,6 +1342,15 @@ namespace VirtualDesktopSwitcher
             }
 
             return options;
+        }
+
+        public void ApplyManualSettings(ManualSettings settings)
+        {
+            TimerEnabled = TimerEnabledOverride.HasValue ? TimerEnabledOverride.Value : settings.TimerEnabled;
+            ManualBinding = settings.Binding == null ? null : settings.Binding.Clone();
+            ManualEnabled = !NoManualTrigger && ManualBinding != null && ManualBinding.IsValid;
+            ManualAction = ManualActionOverride.HasValue ? ManualActionOverride.Value : settings.GetAction();
+            ManualRestartDelayMilliseconds = settings.RestartDelayMilliseconds;
         }
 
         private static string NormalizeOption(string value)
@@ -959,6 +1403,7 @@ namespace VirtualDesktopSwitcher
             Console.WriteLine("  VirtualDesktopSwitcher.exe --codecs HEVC10bit,HEVC --interval-minutes 25");
             Console.WriteLine("  VirtualDesktopSwitcher.exe --codecs HEVC10bit,HEVC --once");
             Console.WriteLine("  VirtualDesktopSwitcher.exe --target-codec HEVC10bit");
+            Console.WriteLine("  VirtualDesktopSwitcher.exe --configure-manual");
             Console.WriteLine();
             Console.WriteLine("Options:");
             Console.WriteLine("  --codecs <list>              Comma-separated codec rotation list.");
@@ -970,6 +1415,11 @@ namespace VirtualDesktopSwitcher
             Console.WriteLine("  --switch-immediately         Switch immediately before entering the timer loop.");
             Console.WriteLine("  --switch-back                Temporarily use the second codec, then restore the first.");
             Console.WriteLine("  --switch-back-delay-ms <n>   Milliseconds before restoring. Default: 50.");
+            Console.WriteLine("  --configure-manual           Configure and save timer/manual settings, then exit.");
+            Console.WriteLine("  --manual-only                Disable automatic timer switching for this run.");
+            Console.WriteLine("  --enable-timer               Force automatic timer switching on for this run.");
+            Console.WriteLine("  --manual-action <action>     Override saved action: switch or restart.");
+            Console.WriteLine("  --no-manual-trigger          Disable the saved manual binding for this run.");
             Console.WriteLine("  --streamer-path <path>       Path to VirtualDesktop.Streamer.exe.");
             Console.WriteLine("  --timeout-seconds <n>        Helper timeout. Default: 15.");
             Console.WriteLine();

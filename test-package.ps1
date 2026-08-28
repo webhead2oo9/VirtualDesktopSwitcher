@@ -72,6 +72,12 @@ if ($helpText -notmatch '\-\-switch-back-delay-ms') {
     throw "VirtualDesktopSwitcher.exe --help did not print the switch-back-delay-ms option."
 }
 
+foreach ($option in @('--configure-manual', '--manual-only', '--enable-timer', '--manual-action', '--no-manual-trigger')) {
+    if ($helpText -notmatch [regex]::Escape($option)) {
+        throw "VirtualDesktopSwitcher.exe --help did not print $option."
+    }
+}
+
 if (-not (Test-Path -LiteralPath $ZipPath -PathType Leaf)) {
     throw "Package zip does not exist: $ZipPath"
 }
