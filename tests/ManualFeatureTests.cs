@@ -21,6 +21,7 @@ namespace VirtualDesktopSwitcher.Tests
                 TestKeyboardTransitions();
                 TestHidTransitions();
                 TestCodecActions();
+                TestScheduledStartupOrdering();
                 Console.WriteLine("Manual feature tests passed (" + assertions + " assertions). ");
                 return 0;
             }
@@ -154,6 +155,69 @@ namespace VirtualDesktopSwitcher.Tests
             Assert(fake.SetCalls.SequenceEqual(new[] { "H264" }), "manual switch uses normal rotation");
         }
 
+        private static void TestScheduledStartupOrdering()
+        {
+            List<CodecInfo> rotation = new List<CodecInfo> { CodecCatalog.Resolve("HEVC"), CodecCatalog.Resolve("H264") };
+
+            Options options = CreateSwitchBackOptions();
+            options.TimerEnabled = false;
+            options.ManualEnabled = false;
+            options.ManualBinding = new ManualBinding { Kind = "keyboard", VirtualKey = 0x51 };
+            FakeCodecClient fake = new FakeCodecClient("H264");
+            AssertThrowsMessage(
+                delegate { new Rotator(options, fake).InitializeScheduledRun(rotation); },
+                "Both the automatic timer and manual trigger are disabled. Run --configure-manual to enable and bind a trigger.",
+                "disabled scheduling is rejected before switch-back normalization");
+            Assert(fake.SetCalls.Count == 0, "disabled scheduling makes no codec-setting calls");
+
+            options = CreateSwitchBackOptions();
+            options.TimerEnabled = false;
+            options.ManualEnabled = true;
+            options.ManualBinding = new ManualBinding { Kind = "keyboard", VirtualKey = 0x51 };
+            fake = new FakeCodecClient("H264");
+            AssertThrowsMessage(
+                delegate
+                {
+                    new Rotator(options, fake, delegate(ManualBinding binding)
+                    {
+                        throw new InvalidOperationException("planned Raw Input failure");
+                    }).InitializeScheduledRun(rotation);
+                },
+                "Manual-only mode could not start Raw Input. planned Raw Input failure",
+                "manual-only Raw Input failure is reported before switch-back normalization");
+            Assert(fake.SetCalls.Count == 0, "manual-only Raw Input failure makes no codec-setting calls");
+
+            options = CreateSwitchBackOptions();
+            options.TimerEnabled = true;
+            options.ManualEnabled = true;
+            options.ManualBinding = new ManualBinding { Kind = "keyboard", VirtualKey = 0x51 };
+            fake = new FakeCodecClient("H264");
+            new Rotator(options, fake, delegate(ManualBinding binding)
+            {
+                throw new InvalidOperationException("planned Raw Input failure");
+            }).InitializeScheduledRun(rotation);
+            Assert(!options.ManualEnabled, "timer mode disables unavailable manual trigger");
+            Assert(fake.SetCalls.SequenceEqual(new[] { "HEVC" }), "timer mode normalizes switch-back codec after scheduling initialization");
+
+            options = CreateSwitchBackOptions();
+            options.Once = true;
+            options.TimerEnabled = false;
+            options.ManualEnabled = false;
+            fake = new FakeCodecClient("H264");
+            Assert(new Rotator(options, fake).Run() == 0, "one-shot switch-back remains exempt from scheduling validation");
+            Assert(fake.SetCalls.SequenceEqual(new[] { "HEVC", "H264", "HEVC" }), "one-shot switch-back preserves switch-away-and-back behavior");
+        }
+
+        private static Options CreateSwitchBackOptions()
+        {
+            Options options = new Options();
+            options.Codecs.Add("HEVC");
+            options.Codecs.Add("H264");
+            options.SwitchBack = true;
+            options.SwitchBackDelayMilliseconds = 0;
+            return options;
+        }
+
         private static IEnumerable<HidButtonReport> Reports(params int[] usages)
         {
             return ReportsWithId(0, usages);
@@ -175,6 +239,13 @@ namespace VirtualDesktopSwitcher.Tests
             bool threw = false;
             try { action(); } catch { threw = true; }
             Assert(threw, name);
+        }
+
+        private static void AssertThrowsMessage(Action action, string expectedMessage, string name)
+        {
+            Exception thrown = null;
+            try { action(); } catch (Exception ex) { thrown = ex; }
+            Assert(thrown != null && thrown.Message == expectedMessage, name);
         }
 
         private sealed class FakeCodecClient : ICodecClient

@@ -56,20 +56,27 @@ namespace VirtualDesktopSwitcher
     {
         private readonly Options options;
         private readonly ICodecClient client;
+        private readonly Func<ManualBinding, RawInputListener> rawInputFactory;
         private readonly ManualResetEvent cancelSignal = new ManualResetEvent(false);
         private volatile bool cancelRequested;
         private RawInputListener manualInput;
         private ManualSettings savedManualSettings;
 
         public Rotator(Options options)
-            : this(options, new CodecInjectionClient(options))
+            : this(options, new CodecInjectionClient(options), CreateRawInputListener)
         {
         }
 
         internal Rotator(Options options, ICodecClient client)
+            : this(options, client, CreateRawInputListener)
+        {
+        }
+
+        internal Rotator(Options options, ICodecClient client, Func<ManualBinding, RawInputListener> rawInputFactory)
         {
             this.options = options;
             this.client = client;
+            this.rawInputFactory = rawInputFactory;
         }
 
         public int Run()
@@ -110,29 +117,27 @@ namespace VirtualDesktopSwitcher
                 throw new InvalidOperationException("--switch-back requires exactly two codecs: the preferred codec first and the temporary codec second.");
             }
 
-            if (options.SwitchBack)
-            {
-                EnsurePreferredCodec(codecs[0]);
-            }
-
             if (options.Once)
             {
+                if (options.SwitchBack)
+                {
+                    EnsurePreferredCodec(codecs[0]);
+                }
                 PerformSwitch(codecs);
                 return 0;
             }
 
-            ValidateScheduledRun();
-            StartManualInput();
-
-            Log("VirtualDesktopSwitcher started. Backend: in-process; Codecs: " +
-                string.Join(", ", codecs.Select(c => c.Code).ToArray()) +
-                "; timer: " + (options.TimerEnabled ? "on (" + options.IntervalMinutes + " minute(s))" : "off") +
-                "; manual trigger: " + (options.ManualEnabled ? "on (" + options.ManualBinding.DisplayText + ", " + options.ManualAction.ToString().ToLowerInvariant() + ")" : "off") +
-                "; beep warning: " + (options.BeepWarning ? "on" : "off") +
-                "; switch back: " + (options.SwitchBack ? "on (delay " + options.SwitchBackDelayMilliseconds + " ms)" : "off") + ".");
-
             try
             {
+                InitializeScheduledRun(codecs);
+
+                Log("VirtualDesktopSwitcher started. Backend: in-process; Codecs: " +
+                    string.Join(", ", codecs.Select(c => c.Code).ToArray()) +
+                    "; timer: " + (options.TimerEnabled ? "on (" + options.IntervalMinutes + " minute(s))" : "off") +
+                    "; manual trigger: " + (options.ManualEnabled ? "on (" + options.ManualBinding.DisplayText + ", " + options.ManualAction.ToString().ToLowerInvariant() + ")" : "off") +
+                    "; beep warning: " + (options.BeepWarning ? "on" : "off") +
+                    "; switch back: " + (options.SwitchBack ? "on (delay " + options.SwitchBackDelayMilliseconds + " ms)" : "off") + ".");
+
                 if (options.SwitchImmediately)
                 {
                     PerformAutomaticSwitch(codecs);
@@ -210,6 +215,16 @@ namespace VirtualDesktopSwitcher
             return 0;
         }
 
+        internal void InitializeScheduledRun(List<CodecInfo> codecs)
+        {
+            ValidateScheduledRun();
+            StartManualInput();
+            if (options.SwitchBack)
+            {
+                EnsurePreferredCodec(codecs[0]);
+            }
+        }
+
         private void ValidateScheduledRun()
         {
             if (!options.TimerEnabled && (options.ManualBinding == null || !options.ManualBinding.IsValid))
@@ -230,7 +245,7 @@ namespace VirtualDesktopSwitcher
             }
             try
             {
-                manualInput = new RawInputListener(options.ManualBinding);
+                manualInput = rawInputFactory(options.ManualBinding);
             }
             catch (Exception ex)
             {
@@ -241,6 +256,11 @@ namespace VirtualDesktopSwitcher
                 options.ManualEnabled = false;
                 Log("WARNING: manual trigger unavailable; continuing in timer mode (" + ex.Message + ").");
             }
+        }
+
+        private static RawInputListener CreateRawInputListener(ManualBinding binding)
+        {
+            return new RawInputListener(binding);
         }
 
         private void PerformSwitch(List<CodecInfo> codecs)
