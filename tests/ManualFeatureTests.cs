@@ -4,6 +4,8 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using System.Diagnostics;
+using System.Web.Script.Serialization;
 
 namespace VirtualDesktopSwitcher.Tests
 {
@@ -19,7 +21,8 @@ namespace VirtualDesktopSwitcher.Tests
             {
                 TestSettings(root);
                 TestOptionsPrecedence();
-                TestActionLabels();
+                TestSettingsEditor();
+                TestCountdown();
                 TestKeyboardTransitions();
                 TestHidTransitions();
                 TestCodecActions();
@@ -41,11 +44,13 @@ namespace VirtualDesktopSwitcher.Tests
             Assert(defaults.TimerEnabled, "timer defaults on");
             Assert(defaults.Binding == null, "manual binding defaults empty");
             Assert(defaults.GetAction() == ManualAction.Restart, "manual action defaults to restart");
-            Assert(warning != null, "missing settings warns");
+            Assert(warning == null, "first launch uses defaults without a warning");
+            Assert(defaults.CountdownSeconds == 0 && !defaults.CountdownBeep, "new installs reset immediately and silently");
 
             string path = Path.Combine(root, "settings.json");
             ManualSettings settings = ManualSettings.CreateDefault();
             settings.TimerEnabled = false;
+            settings.ManualEnabled = true;
             settings.Action = "switch";
             settings.RestartDelayMilliseconds = 123;
             settings.Binding = new ManualBinding { Kind = "keyboard", VirtualKey = 0x4b, Modifiers = (int)KeyboardModifiers.Control };
@@ -55,7 +60,7 @@ namespace VirtualDesktopSwitcher.Tests
             Assert(!loaded.TimerEnabled && loaded.GetAction() == ManualAction.Switch, "settings round trip");
             Assert(loaded.Binding.VirtualKey == 0x4b && loaded.Binding.Modifiers == 1, "binding round trip");
             string savedJson = File.ReadAllText(path);
-            Assert(!savedJson.Contains("ManualEnabled") && !savedJson.Contains("IsValid") && !savedJson.Contains("DisplayText"), "settings contain only the supported preferences");
+            Assert(savedJson.Contains("ManualEnabled") && !savedJson.Contains("IsValid") && !savedJson.Contains("DisplayText"), "enabled preference is persisted without computed properties");
 
             settings.Action = "restart";
             ManualSettingsStore.SaveTo(path, settings);
@@ -70,12 +75,30 @@ namespace VirtualDesktopSwitcher.Tests
             File.WriteAllText(path, "{\"Version\":99,\"TimerEnabled\":false,\"Action\":\"restart\",\"RestartDelayMilliseconds\":50}");
             loaded = ManualSettingsStore.LoadFrom(path, out warning);
             Assert(warning != null && loaded.Version == ManualSettings.CurrentVersion, "unsupported version falls back");
+
+            settings.Version = 1;
+            settings.ManualEnabled = false;
+            File.WriteAllText(path, new JavaScriptSerializer().Serialize(settings));
+            loaded = ManualSettingsStore.LoadFrom(path, out warning);
+            Assert(warning == null && loaded.Version == 2 && loaded.ManualEnabled, "v1 binding migrates as enabled");
+            Assert(loaded.CountdownSeconds == 3 && loaded.CountdownBeep, "v1 countdown behavior is preserved");
+            loaded.ManualEnabled = false;
+            loaded.TimerEnabled = true;
+            loaded.CountdownSeconds = 1;
+            loaded.CountdownBeep = false;
+            ManualSettingsStore.SaveTo(path, loaded);
+            loaded = ManualSettingsStore.LoadFrom(path, out warning);
+            Assert(!loaded.ManualEnabled && loaded.Binding != null, "disabled binding survives save and reload");
+            Assert(loaded.CountdownSeconds == 1 && !loaded.CountdownBeep, "warning preferences survive save and reload");
+            loaded.CountdownSeconds = 2;
+            AssertThrows(delegate { ManualSettingsStore.SaveTo(path, loaded); }, "unsupported countdown rejected");
         }
 
         private static void TestOptionsPrecedence()
         {
             ManualSettings saved = ManualSettings.CreateDefault();
             saved.TimerEnabled = false;
+            saved.ManualEnabled = true;
             saved.Action = "restart";
             saved.RestartDelayMilliseconds = 321;
             saved.Binding = new ManualBinding { Kind = "keyboard", VirtualKey = 0x51 };
@@ -92,22 +115,53 @@ namespace VirtualDesktopSwitcher.Tests
             Assert(!options.TimerEnabled && !options.ManualEnabled, "CLI can disable both for validation to reject");
 
             AssertThrows(delegate { Options.Parse(new[] { "--manual-action", "invalid" }); }, "invalid manual action is rejected");
+            saved.TimerEnabled = true;
+            saved.ManualEnabled = false;
+            saved.CountdownSeconds = 1;
+            options = Options.Parse(new string[0]);
+            options.ApplyManualSettings(saved);
+            Assert(!options.ManualEnabled && options.ManualBinding != null, "retained binding does not enable manual control");
+            Assert(options.ManualCountdownSeconds == 1, "saved countdown applies");
+            options = Options.Parse(new[] { "--manual-only" });
+            options.ApplyManualSettings(saved);
+            Assert(options.ManualEnabled && !options.TimerEnabled, "manual-only explicitly activates retained binding");
         }
 
-        private static void TestActionLabels()
+        private static void TestSettingsEditor()
         {
-            using (ManualSettingsEditor editor = new ManualSettingsEditor(ManualSettings.CreateDefault()))
+            ManualSettings initial = ManualSettings.CreateDefault();
+            initial.Binding = new ManualBinding { Kind = "keyboard", VirtualKey = 0x4b, Modifiers = 1 };
+            using (ManualSettingsEditor editor = new ManualSettingsEditor(initial))
             {
-                ComboBox action = editor.Controls.OfType<ComboBox>().Single();
-                Label description = editor.Controls.OfType<Label>().Single(label => !label.AutoSize);
-
-                Assert(action.Items.Cast<string>().SequenceEqual(new[] { "Refresh Codec", "Change Codec" }), "manual action labels are clear");
-                Assert(description.Text == "Switches away briefly, then restores the original codec.", "refresh action description is shown");
-
-                action.SelectedIndex = 1;
-                Assert(description.Text == "Changes codec and does not restore the original codec.", "change action description is shown");
-                Assert(editor.Controls.OfType<Label>().Any(label => label.Text == "Refresh delay"), "refresh delay uses matching terminology");
+                ComboBox schedule = (ComboBox)editor.Controls["schedule"];
+                ComboBox countdown = (ComboBox)editor.Controls["countdown"];
+                ManualSettings saved;
+                Assert(editor.TryCreateSettings(null, out saved) && saved.TimerEnabled && !saved.ManualEnabled, "default editor selects automatic scheduling");
+                Assert(saved.Binding != null, "automatic mode keeps the saved binding");
+                schedule.SelectedIndex = 1;
+                countdown.SelectedIndex = 2;
+                Assert(editor.TryCreateSettings(null, out saved) && !saved.TimerEnabled && saved.ManualEnabled, "manual-only can reuse the saved binding");
+                Assert(saved.CountdownSeconds == 3, "warning choice saves seconds");
+                schedule.SelectedIndex = 2;
+                Assert(editor.TryCreateSettings(null, out saved) && saved.TimerEnabled && saved.ManualEnabled, "both scheduling methods can be enabled");
+                editor.Controls.OfType<Button>().Single(button => button.Text == "Clear").PerformClick();
+                Assert(editor.ValidationError != null, "missing binding is rejected in the editor");
+                schedule.SelectedIndex = 0;
+                Assert(editor.ValidationError == null, "automatic mode does not require a binding");
             }
+        }
+
+        private static void TestCountdown()
+        {
+            Options options = new Options();
+            Rotator rotator = new Rotator(options, new FakeCodecClient("HEVC"));
+            Stopwatch watch = Stopwatch.StartNew();
+            Assert(rotator.ManualCountdown(), "immediate action proceeds");
+            Assert(watch.ElapsedMilliseconds < 500, "immediate action has no fixed countdown");
+            options.ManualCountdownSeconds = 1;
+            watch.Restart();
+            Assert(rotator.ManualCountdown(), "silent countdown proceeds");
+            Assert(watch.ElapsedMilliseconds >= 900, "one-second warning waits before action");
         }
 
         private static void TestKeyboardTransitions()
@@ -142,6 +196,24 @@ namespace VirtualDesktopSwitcher.Tests
             int otherUsage = RawInputHelpers.MakeUsageKey(9, 8);
             Assert(tracker.Update(firstDevice, ReportsWithId(2, otherUsage)).Single() == otherUsage, "another HID report ID triggers independently");
             Assert(!tracker.Update(firstDevice, Reports(usage)).Any(), "alternating report IDs do not retrigger held buttons");
+
+            ManualBinding deviceBinding = new ManualBinding { Kind = "hid", UsagePage = 9, ButtonUsage = 7, DevicePath = "wheel-a" };
+            Assert(RawInputHelpers.MatchesDevice(deviceBinding, "WHEEL-A"), "bound device comparison is case insensitive");
+            Assert(!RawInputHelpers.MatchesDevice(deviceBinding, "wheel-b"), "another controller cannot trigger a new binding");
+            Assert(deviceBinding.Clone().DevicePath == "wheel-a", "device identity survives cloning");
+            deviceBinding.DevicePath = null;
+            Assert(RawInputHelpers.MatchesDevice(deviceBinding, "wheel-b"), "legacy wildcard bindings remain supported");
+
+            RawInputNative.HIDP_BUTTON_CAPS[] caps = new[]
+            {
+                new RawInputNative.HIDP_BUTTON_CAPS { UsagePage = 9, ReportID = 0 }
+            };
+            HashSet<int> pressed = RawInputHelpers.ReadPressedButtons(caps, 1, 0, delegate { return new ushort[] { 7, 8 }; });
+            Assert(pressed.SetEquals(new[] { usage, otherUsage }), "multiple held buttons survive a non-range capability");
+            pressed = RawInputHelpers.ReadPressedButtons(caps, 1, 0, delegate { return null; });
+            Assert(pressed == null, "failed button parsing returns unknown state");
+            Assert(!tracker.Update(firstDevice, new HidButtonReport[0]).Any(), "unknown report produces no transition");
+            Assert(!tracker.Update(firstDevice, Reports(usage)).Any(), "held button is not retriggered after failed parsing");
         }
 
         private static void TestCodecActions()

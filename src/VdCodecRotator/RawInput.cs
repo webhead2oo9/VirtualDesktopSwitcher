@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Text;
 using System.Windows.Forms;
 
 namespace VirtualDesktopSwitcher
@@ -15,6 +16,7 @@ namespace VirtualDesktopSwitcher
         private readonly ManualResetEvent readySignal = new ManualResetEvent(false);
         private readonly KeyboardStateTracker keyboardState = new KeyboardStateTracker();
         private readonly HidButtonStateTracker hidState = new HidButtonStateTracker();
+        private readonly Dictionary<IntPtr, string> devicePaths = new Dictionary<IntPtr, string>();
         private Thread thread;
         private RawInputWindow window;
         private Exception initializationError;
@@ -139,6 +141,18 @@ namespace VirtualDesktopSwitcher
                 return;
             }
 
+            if (!string.IsNullOrEmpty(binding.DevicePath))
+            {
+                string path;
+                if (!devicePaths.TryGetValue(packet.Device, out path))
+                {
+                    path = RawInputNative.GetDevicePath(packet.Device);
+                    if (path == null) return;
+                    devicePaths[packet.Device] = path;
+                }
+                if (!RawInputHelpers.MatchesDevice(binding, path)) return;
+            }
+
             int requested = RawInputHelpers.MakeUsageKey(binding.UsagePage, binding.ButtonUsage);
             foreach (int pressed in hidState.Update(packet.Device, RawInputHelpers.GetHidButtonReports(packet)))
             {
@@ -152,6 +166,7 @@ namespace VirtualDesktopSwitcher
         private void DeviceRemoved(IntPtr device)
         {
             hidState.RemoveDevice(device);
+            devicePaths.Remove(device);
         }
 
         private void RaiseTrigger()
@@ -267,11 +282,14 @@ namespace VirtualDesktopSwitcher
                 {
                     foreach (int usageKey in hidState.Update(packet.Device, RawInputHelpers.GetHidButtonReports(packet)))
                     {
+                        string devicePath = RawInputNative.GetDevicePath(packet.Device);
+                        if (string.IsNullOrEmpty(devicePath)) return;
                         Accept(new ManualBinding
                         {
                             Kind = "hid",
                             UsagePage = (usageKey >> 16) & 0xffff,
-                            ButtonUsage = usageKey & 0xffff
+                            ButtonUsage = usageKey & 0xffff,
+                            DevicePath = devicePath
                         });
                         return;
                     }
@@ -345,6 +363,27 @@ namespace VirtualDesktopSwitcher
 
     internal static class RawInputHelpers
     {
+        internal static bool MatchesDevice(ManualBinding binding, string devicePath)
+        {
+            return string.IsNullOrEmpty(binding.DevicePath) ||
+                string.Equals(binding.DevicePath, devicePath, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // A failed read is unknown state, not a release of every held button.
+        internal static HashSet<int> ReadPressedButtons(RawInputNative.HIDP_BUTTON_CAPS[] caps, int count,
+            int reportId, Func<RawInputNative.HIDP_BUTTON_CAPS, ushort[]> readUsages)
+        {
+            HashSet<int> pressed = new HashSet<int>();
+            for (int i = 0; i < count; i++)
+            {
+                if (caps[i].ReportID != reportId) continue;
+                ushort[] usages = readUsages(caps[i]);
+                if (usages == null) return null;
+                foreach (ushort usage in usages) pressed.Add(MakeUsageKey(caps[i].UsagePage, usage));
+            }
+            return pressed;
+        }
+
         public static bool IsModifierKey(int key)
         {
             return key == 0x10 || key == 0x11 || key == 0x12 || key == 0x5b || key == 0x5c ||
@@ -432,29 +471,19 @@ namespace VirtualDesktopSwitcher
                     {
                         Marshal.Copy(packet.HidData, reportOffset, report, packet.HidReportSize);
                         int reportId = usesReportIds ? packet.HidData[reportOffset] : 0;
-                        HashSet<int> pressed = new HashSet<int>();
-                        for (int capIndex = 0; capIndex < capCount; capIndex++)
+                        HashSet<int> pressed = ReadPressedButtons(buttonCaps, capCount, reportId, delegate(RawInputNative.HIDP_BUTTON_CAPS cap)
                         {
-                            RawInputNative.HIDP_BUTTON_CAPS cap = buttonCaps[capIndex];
-                            if (cap.ReportID != reportId)
-                            {
-                                continue;
-                            }
-                            int maximumUsages = cap.IsRange != 0
-                                ? Math.Max(1, cap.Range.UsageMax - cap.Range.UsageMin + 1)
-                                : 1;
+                            // GetUsages returns all buttons on the page/collection, not just this cap.
+                            uint maximumUsages = RawInputNative.HidP_MaxUsageListLength(0, cap.UsagePage, preparsed);
+                            if (maximumUsages == 0) return null;
                             ushort[] usages = new ushort[maximumUsages];
                             uint usageLength = (uint)usages.Length;
                             int status = RawInputNative.HidP_GetUsages(0, cap.UsagePage, cap.LinkCollection, usages, ref usageLength, preparsed, report, (uint)packet.HidReportSize);
-                            if (status == RawInputNative.HIDP_STATUS_SUCCESS)
-                            {
-                                for (int usageIndex = 0; usageIndex < usageLength; usageIndex++)
-                                {
-                                    pressed.Add(MakeUsageKey(cap.UsagePage, usages[usageIndex]));
-                                }
-                            }
-                        }
-                        results.Add(new HidButtonReport { ReportId = reportId, Pressed = pressed });
+                            if (status != RawInputNative.HIDP_STATUS_SUCCESS || usageLength > usages.Length) return null;
+                            Array.Resize(ref usages, (int)usageLength);
+                            return usages;
+                        });
+                        if (pressed != null) results.Add(new HidButtonReport { ReportId = reportId, Pressed = pressed });
                     }
                     finally
                     {
@@ -581,6 +610,15 @@ namespace VirtualDesktopSwitcher
 
     internal static class RawInputNative
     {
+        internal static string GetDevicePath(IntPtr device)
+        {
+            const uint deviceName = 0x20000007;
+            uint length = 0;
+            if (GetRawInputDeviceName(device, deviceName, null, ref length) == uint.MaxValue || length == 0) return null;
+            StringBuilder name = new StringBuilder((int)length);
+            return GetRawInputDeviceName(device, deviceName, name, ref length) == uint.MaxValue ? null : name.ToString();
+        }
+
         public const int WM_INPUT = 0x00ff;
         public const int WM_INPUT_DEVICE_CHANGE = 0x00fe;
         public const int WM_CLOSE = 0x0010;
@@ -752,6 +790,12 @@ namespace VirtualDesktopSwitcher
 
         [DllImport("user32.dll", SetLastError = true)]
         internal static extern uint GetRawInputDeviceInfo(IntPtr device, uint command, IntPtr data, ref uint size);
+
+        [DllImport("hid.dll")]
+        internal static extern uint HidP_MaxUsageListLength(int reportType, ushort usagePage, IntPtr preparsedData);
+
+        [DllImport("user32.dll", EntryPoint = "GetRawInputDeviceInfoW", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern uint GetRawInputDeviceName(IntPtr device, uint command, StringBuilder data, ref uint size);
 
         [DllImport("hid.dll")]
         internal static extern int HidP_GetCaps(IntPtr preparsedData, out HIDP_CAPS capabilities);

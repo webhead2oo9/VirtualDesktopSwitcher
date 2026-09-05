@@ -465,13 +465,14 @@ namespace VirtualDesktopSwitcher
             return (int)Math.Ceiling(milliseconds);
         }
 
-        private bool ManualCountdown()
+        internal bool ManualCountdown()
         {
-            for (int remaining = 3; remaining > 0; remaining--)
+            for (int remaining = options.ManualCountdownSeconds; remaining > 0; remaining--)
             {
+                if (cancelRequested) return false;
                 Stopwatch tick = Stopwatch.StartNew();
                 Log("Manual action in " + remaining + ".");
-                PlayBeep();
+                if (options.ManualCountdownBeep) PlayBeep();
 
                 int remainingMilliseconds = Math.Max(0, 1000 - (int)tick.ElapsedMilliseconds);
                 if (cancelSignal.WaitOne(remainingMilliseconds))
@@ -480,7 +481,7 @@ namespace VirtualDesktopSwitcher
                 }
             }
 
-            return true;
+            return !cancelRequested;
         }
 
         private static void PlayBeep()
@@ -868,6 +869,8 @@ namespace VirtualDesktopSwitcher
         public ManualBinding ManualBinding;
         public ManualAction ManualAction = ManualAction.Restart;
         public int ManualRestartDelayMilliseconds = 50;
+        public int ManualCountdownSeconds;
+        public bool ManualCountdownBeep;
         public bool ShowHelp;
         public string StreamerPath = @"C:\Program Files\Virtual Desktop Streamer\VirtualDesktop.Streamer.exe";
         public int TimeoutSeconds = 15;
@@ -983,9 +986,11 @@ namespace VirtualDesktopSwitcher
         {
             TimerEnabled = TimerEnabledOverride.HasValue ? TimerEnabledOverride.Value : settings.TimerEnabled;
             ManualBinding = settings.Binding == null ? null : settings.Binding.Clone();
-            ManualEnabled = !NoManualTrigger && ManualBinding != null && ManualBinding.IsValid;
+            ManualEnabled = !NoManualTrigger && (settings.ManualEnabled || TimerEnabledOverride == false) && ManualBinding != null && ManualBinding.IsValid;
             ManualAction = ManualActionOverride.HasValue ? ManualActionOverride.Value : settings.GetAction();
             ManualRestartDelayMilliseconds = settings.RestartDelayMilliseconds;
+            ManualCountdownSeconds = settings.CountdownSeconds;
+            ManualCountdownBeep = settings.CountdownBeep;
         }
 
         private static string NormalizeOption(string value)

@@ -65,7 +65,8 @@ Download a release, unzip it, and run the executable from that folder:
 With no codec arguments, it reads the current codec and opens a small popup
 asking which different codec to toggle with, whether to beep before timer
 switches, how many minutes to wait between switches (default `25`, range
-`1`–`10080`), and whether to enable a manual trigger.
+`1`–`10080`). Choose **Automatically**, **When I press a button**, or **Both**
+under **When should the stream reset?** Automatic switching remains the default.
 
 To configure the manual trigger without starting or requiring Virtual Desktop
 Streamer, run:
@@ -74,7 +75,7 @@ Streamer, run:
 .\VirtualDesktopSwitcher.exe --configure-manual
 ```
 
-Choose **Bind**, then press one non-modifier keyboard key (optionally with Ctrl,
+Choose **When I press a button** or **Both**, click **Bind...**, then press one non-modifier keyboard key (optionally with Ctrl,
 Alt, Shift, or Windows) or one discrete wheel/controller button. The setting is
 global: the trigger remains active while another application has focus.
 
@@ -163,36 +164,54 @@ milliseconds.
 
 Manual settings are stored in the versioned file
 `%LOCALAPPDATA%\VirtualDesktopSwitcher\manual-settings.json`. Updates use an
-atomic file replacement. If the file is missing, malformed, or from an
-unsupported version, the program warns and uses safe defaults: timer enabled,
-manual trigger unbound, **Refresh Codec**, and a `50 ms` refresh delay.
+atomic file replacement. First launch uses defaults without a warning: timer
+enabled, manual trigger unbound, **Refresh and restore current codec**, a `50 ms`
+refresh delay, and immediate manual activation without a beep. Malformed or
+unsupported settings produce a warning and fall back to these defaults.
+
+Switching to **Automatically** disables manual control but keeps the saved
+binding. **Clear** explicitly removes the binding. Manual modes require a binding
+before the settings dialog can close. The scheduling choice, binding, manual
+action, refresh delay, and warning preferences are saved for the next launch.
+The interval and codec options still come from the startup dialog or command line.
+
+Version 1 settings upgrade automatically, preserving enabled bindings and the
+previous three-second audible countdown. New configurations default to immediate
+activation. To change either behavior, use the **Warning** selector and optional
+**Beep during warning** checkbox.
 
 The effective setting order is command-line override, saved setting, then
-default. Runs with an explicit `--codecs` list automatically use the saved
-binding. `--once` and `--target-codec` are one-shot modes and ignore both timer
+default. Runs with an explicit `--codecs` list use the saved manual preferences.
+`--manual-only` activates a retained binding even if manual control was disabled;
+`--no-manual-trigger` always disables it for that run.
+`--once` and `--target-codec` are one-shot modes and ignore both timer
 and manual settings.
 
-Every manual action counts down `3`, `2`, `1` with one beep per second. If beep
+Manual actions can activate immediately or after a one- or three-second warning.
+Beeps are optional and independent of the automatic timer warning. If beep
 playback is unavailable, the countdown continues. Press Ctrl+C to cancel it and
 stop normally. Further key repeats or button reports are ignored during the
 countdown and codec operation. A manual trigger that arrives during the
 optional five-second timer warning takes priority; after a successful manual
 action, the automatic interval starts over.
 
-- **Refresh Codec** remembers the exact active codec, switches to the next
+- **Refresh and restore current codec** remembers the active codec when the action
+  starts (after any warning), switches to the next
   different codec in the configured rotation, waits the saved refresh delay,
   and restores the remembered codec. This resets the encoder; it does not exit
   Virtual Desktop Streamer.
-- **Change Codec** advances through the same configured rotation used by the
-  timer.
+- **Change codec and stay there** advances through the same configured rotation
+  used by the timer. This action and the refresh delay are under **Advanced manual options**.
 
 ### Controller support and troubleshooting
 
 The listener uses Windows Raw Input in background mode and registers keyboard,
-joystick, gamepad, and multi-axis controller collections. HID bindings store
-only the button usage page and usage number, not a vendor, product, or device
-identifier. Consequently, the equivalent reported button on another supported
-controller can activate the same binding.
+joystick, gamepad, and multi-axis controller collections. New controller bindings
+store the device path as well as the button usage, so an equivalent button on a
+different controller does not trigger a reset. The UI identifies these as
+**(bound device)**. Older bindings show **(any device)** and keep matching across
+controllers until rebound. If a USB port or driver change alters the device path,
+bind the button again.
 
 Only discrete HID buttons can be bound. Axes, pedals, analog paddles, hats that
 are reported solely as axes, and force-feedback data are not supported. If a

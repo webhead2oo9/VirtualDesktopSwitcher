@@ -184,6 +184,18 @@ namespace VirtualDesktopSwitcher
             form.CancelButton = cancelButton;
             form.Controls.Add(cancelButton);
 
+            if (configureManual)
+            {
+                Action resize = delegate
+                {
+                    int buttonsTop = manualEditor.Bottom + 12;
+                    okButton.Top = cancelButton.Top = buttonsTop;
+                    form.ClientSize = new Size(500, buttonsTop + 44);
+                };
+                manualEditor.SizeChanged += delegate { resize(); };
+                resize();
+            }
+
             if (form.ShowDialog() != DialogResult.OK)
             {
                 throw new InvalidOperationException("Codec selection cancelled.");
