@@ -181,6 +181,10 @@ jobs:
                   $title = "${{ steps.release.outputs.title }}"
                   $notesPath = "${{ steps.notes.outputs.notes_path }}"
                   $zip = (Resolve-Path .\artifacts\VirtualDesktopSwitcher.zip).Path
+                  $releaseFlags = @()
+                  if ("${{ github.ref }}" -ne "refs/heads/main") {
+                    $releaseFlags = @("--prerelease", "--latest=false")
+                  }
 
                   $existingRelease = gh release list --limit 1000 --json tagName | ConvertFrom-Json | Where-Object { $_.tagName -eq $tag } | Select-Object -First 1
                   if ($LASTEXITCODE -ne 0) {
@@ -188,14 +192,14 @@ jobs:
                   }
 
                   if ($existingRelease) {
-                    gh release edit $tag --title $title --notes-file $notesPath
+                    gh release edit $tag --title $title --notes-file $notesPath @releaseFlags
                     if ($LASTEXITCODE -ne 0) {
                       throw "Unable to update GitHub release $tag."
                     }
 
                     gh release upload $tag $zip --clobber
                   } else {
-                    gh release create $tag $zip --title $title --notes-file $notesPath
+                    gh release create $tag $zip --title $title --notes-file $notesPath @releaseFlags
                   }
 
                   if ($LASTEXITCODE -ne 0) {
