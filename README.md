@@ -63,10 +63,12 @@ Download a release, unzip it, and run the executable from that folder:
 ```
 
 With no codec arguments, it reads the current codec and opens a small popup
-asking which different codec to toggle with, whether to beep before timer
-switches, how many minutes to wait between switches (default `25`, range
-`1`–`10080`). Choose **Automatically**, **When I press a button**, or **Both**
-under **When should the stream reset?** Automatic switching remains the default.
+asking which different codec to toggle with and **When should the stream
+reset?**: **Automatically**, **When I press a button**, or **Both**. Automatic
+switching remains the default. Below that choice are the timer options: how many
+minutes to wait between switches (default `25`, range `1`–`10080`) and whether
+to beep before timer switches. The interval and timer beep are greyed out when
+only the button resets the stream.
 
 To configure the manual trigger without starting or requiring Virtual Desktop
 Streamer, run:
@@ -75,9 +77,12 @@ Streamer, run:
 .\VirtualDesktopSwitcher.exe --configure-manual
 ```
 
-Choose **When I press a button** or **Both**, click **Bind...**, then press one non-modifier keyboard key (optionally with Ctrl,
-Alt, Shift, or Windows) or one discrete wheel/controller button. The setting is
-global: the trigger remains active while another application has focus.
+Choose **When I press a button** or **Both**, click **Bind...**, then press one
+non-modifier keyboard key (optionally with Ctrl, Alt, Shift, or Windows) or one
+discrete wheel/controller button. A key binding is saved once you release the
+keys. Press Esc on its own to cancel binding; Esc can only be bound together with a
+modifier. The setting is global: the trigger remains active while another
+application has focus.
 
 Prefer to build it yourself? See [Building from source](#building-from-source).
 
@@ -137,7 +142,7 @@ Prefer to build it yourself? See [Building from source](#building-from-source).
 | `--switch-immediately` | Switch immediately before entering the timer loop. |
 | `--switch-back` | Treat the first of exactly two codecs as preferred. At each interval, switch to the second codec, wait for the switch-back delay, and restore the first. The preferred codec is also restored when the tool starts. |
 | `--switch-back-delay-ms <n>` | Milliseconds to stay on the temporary codec before restoring the preferred one. Default `50`, range `0`–`60000`. |
-| `--configure-manual` | Open manual/timer settings, save them, and exit without requiring Streamer. |
+| `--configure-manual` | Open manual/timer settings, save them, and exit without requiring Streamer. Cancel leaves the saved settings unchanged and exits with code `0`. |
 | `--manual-only` | Disable automatic timer switching for this run. Requires a saved binding. |
 | `--enable-timer` | Force automatic timer switching on for this run. |
 | `--manual-action <switch\|restart>` | Override the saved manual action for this run. |
@@ -172,13 +177,14 @@ unsupported settings produce a warning and fall back to these defaults.
 Switching to **Automatically** disables manual control but keeps the saved
 binding. **Clear** explicitly removes the binding. Manual modes require a binding
 before the settings dialog can close. The scheduling choice, binding, manual
-action, refresh delay, and warning preferences are saved for the next launch.
-The interval and codec options still come from the startup dialog or command line.
+action, refresh delay, and countdown preferences are saved for the next launch.
+The codec pair, interval, timer beep, and **Switch back to** options are not
+saved; they come from the startup dialog or command line on every launch.
 
 Version 1 settings upgrade automatically, preserving enabled bindings and the
 previous three-second audible countdown. New configurations default to immediate
-activation. To change either behavior, use the **Warning** selector and optional
-**Beep during warning** checkbox.
+activation. To change either behavior, use the **Countdown** selector and optional
+**Beep during countdown** checkbox.
 
 The effective setting order is command-line override, saved setting, then
 default. Runs with an explicit `--codecs` list use the saved manual preferences.
@@ -187,7 +193,7 @@ default. Runs with an explicit `--codecs` list use the saved manual preferences.
 `--once` and `--target-codec` are one-shot modes and ignore both timer
 and manual settings.
 
-Manual actions can activate immediately or after a one- or three-second warning.
+Manual actions can activate immediately or after a one- or three-second countdown.
 Beeps are optional and independent of the automatic timer warning. If beep
 playback is unavailable, the countdown continues. Press Ctrl+C to cancel it and
 stop normally. Further key repeats or button reports are ignored during the
@@ -195,8 +201,13 @@ countdown and codec operation. A manual trigger that arrives during the
 optional five-second timer warning takes priority; after a successful manual
 action, the automatic interval starts over.
 
+If a manual action fails (for example, Streamer does not respond in time), the
+error is logged, two low beeps play whether or not countdown beeps are enabled,
+and the button stays active for the next attempt. A failed timer switch still
+stops the run.
+
 - **Refresh and restore current codec** remembers the active codec when the action
-  starts (after any warning), switches to the next
+  starts (after any countdown), switches to the next
   different codec in the configured rotation, waits the saved refresh delay,
   and restores the remembered codec. This resets the encoder; it does not exit
   Virtual Desktop Streamer.
@@ -205,13 +216,21 @@ action, the automatic interval starts over.
 
 ### Controller support and troubleshooting
 
-The listener uses Windows Raw Input in background mode and registers keyboard,
-joystick, gamepad, and multi-axis controller collections. New controller bindings
+The listener uses Windows Raw Input in background mode. A keyboard binding
+registers only the keyboard; a controller binding registers only joystick,
+gamepad, and multi-axis controller collections. New controller bindings
 store the device path as well as the button usage, so an equivalent button on a
-different controller does not trigger a reset. The UI identifies these as
-**(bound device)**. Older bindings show **(any device)** and keep matching across
-controllers until rebound. If a USB port or driver change alters the device path,
-bind the button again.
+different controller does not trigger a reset. The UI shows the product name the
+controller reports, followed by the button number. Older bindings show
+**Any controller button N** and keep matching across controllers until rebound.
+
+If the bound controller is plugged into a different USB port, its device path
+changes. While the original device is missing, the button on the same controller
+model (same vendor/product ID and interface) still triggers. When the original
+device is connected, only that one triggers, so two identical controllers never
+trigger each other. If no matching controller is connected when the run starts,
+a warning is logged and the button starts working once the controller is plugged
+in.
 
 Only discrete HID buttons can be bound. Axes, pedals, analog paddles, hats that
 are reported solely as axes, and force-feedback data are not supported. If a

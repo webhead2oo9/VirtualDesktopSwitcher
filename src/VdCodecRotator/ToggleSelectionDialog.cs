@@ -47,43 +47,48 @@ namespace VirtualDesktopSwitcher
             combo.SelectedIndex = GetSuggestedIndex(currentCodec, options);
             form.Controls.Add(combo);
 
+            // Interval and timer options. With manual settings this panel sits under "When should the
+            // stream reset?", which decides whether the timer runs at all.
+            Panel timerSection = new Panel();
+            timerSection.Size = new Size(388, 122);
+
             Label intervalLabel = new Label();
             intervalLabel.AutoSize = true;
-            intervalLabel.Location = new Point(16, 118);
+            intervalLabel.Location = new Point(0, 4);
             intervalLabel.Text = "Switch every";
-            form.Controls.Add(intervalLabel);
+            timerSection.Controls.Add(intervalLabel);
 
             NumericUpDown intervalInput = new NumericUpDown();
-            intervalInput.Location = new Point(100, 114);
+            intervalInput.Location = new Point(84, 0);
             intervalInput.Size = new Size(72, 24);
             intervalInput.Minimum = 1;
             intervalInput.Maximum = 10080;
             intervalInput.Value = initialIntervalMinutes;
-            form.Controls.Add(intervalInput);
+            timerSection.Controls.Add(intervalInput);
 
             Label minutesLabel = new Label();
             minutesLabel.AutoSize = true;
-            minutesLabel.Location = new Point(180, 118);
+            minutesLabel.Location = new Point(164, 4);
             minutesLabel.Text = "minute(s)";
-            form.Controls.Add(minutesLabel);
+            timerSection.Controls.Add(minutesLabel);
 
             CheckBox beepWarningInput = new CheckBox();
             beepWarningInput.AutoSize = true;
-            beepWarningInput.Location = new Point(16, 150);
+            beepWarningInput.Location = new Point(0, 36);
             beepWarningInput.Text = "Beep 5 seconds before each timer switch";
             beepWarningInput.Checked = initialBeepWarning;
-            form.Controls.Add(beepWarningInput);
+            timerSection.Controls.Add(beepWarningInput);
 
             CheckBox switchBackInput = new CheckBox();
             switchBackInput.AutoSize = true;
-            switchBackInput.Location = new Point(16, 181);
+            switchBackInput.Location = new Point(0, 67);
             switchBackInput.Text = "Switch back to";
             switchBackInput.Checked = initialSwitchBack;
-            form.Controls.Add(switchBackInput);
+            timerSection.Controls.Add(switchBackInput);
 
             ComboBox switchBackCombo = new ComboBox();
             switchBackCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-            switchBackCombo.Location = new Point(120, 178);
+            switchBackCombo.Location = new Point(104, 64);
             switchBackCombo.Size = new Size(200, 24);
             switchBackCombo.DisplayMember = "Label";
             foreach (CodecInfo option in CodecCatalog.All)
@@ -100,28 +105,28 @@ namespace VirtualDesktopSwitcher
                 }
             }
             switchBackCombo.Enabled = switchBackInput.Checked;
-            form.Controls.Add(switchBackCombo);
+            timerSection.Controls.Add(switchBackCombo);
 
             Label switchBackDelayLabel = new Label();
             switchBackDelayLabel.AutoSize = true;
-            switchBackDelayLabel.Location = new Point(33, 212);
+            switchBackDelayLabel.Location = new Point(17, 98);
             switchBackDelayLabel.Text = "Switch back after";
-            form.Controls.Add(switchBackDelayLabel);
+            timerSection.Controls.Add(switchBackDelayLabel);
 
             NumericUpDown switchBackDelayInput = new NumericUpDown();
-            switchBackDelayInput.Location = new Point(150, 208);
+            switchBackDelayInput.Location = new Point(134, 94);
             switchBackDelayInput.Size = new Size(72, 24);
             switchBackDelayInput.Minimum = 0;
             switchBackDelayInput.Maximum = 60000;
             switchBackDelayInput.Value = initialSwitchBackDelayMilliseconds;
             switchBackDelayInput.Enabled = switchBackInput.Checked;
-            form.Controls.Add(switchBackDelayInput);
+            timerSection.Controls.Add(switchBackDelayInput);
 
             Label switchBackDelayUnitLabel = new Label();
             switchBackDelayUnitLabel.AutoSize = true;
-            switchBackDelayUnitLabel.Location = new Point(230, 212);
+            switchBackDelayUnitLabel.Location = new Point(214, 98);
             switchBackDelayUnitLabel.Text = "millisecond(s)";
-            form.Controls.Add(switchBackDelayUnitLabel);
+            timerSection.Controls.Add(switchBackDelayUnitLabel);
 
             switchBackInput.CheckedChanged += delegate
             {
@@ -142,8 +147,8 @@ namespace VirtualDesktopSwitcher
 
             if (configureManual)
             {
-                manualEditor = new ManualSettingsEditor(workingManual);
-                manualEditor.Location = new Point(16, 248);
+                manualEditor = new ManualSettingsEditor(workingManual, timerSection);
+                manualEditor.Location = new Point(16, 114);
                 form.Controls.Add(manualEditor);
 
                 Action refreshTimerControls = delegate
@@ -153,6 +158,11 @@ namespace VirtualDesktopSwitcher
                 };
                 manualEditor.TimerEnabledChanged += delegate { refreshTimerControls(); };
                 refreshTimerControls();
+            }
+            else
+            {
+                timerSection.Location = new Point(16, 114);
+                form.Controls.Add(timerSection);
             }
 
             Button okButton = new Button();

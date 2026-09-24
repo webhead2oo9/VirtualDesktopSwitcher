@@ -30,6 +30,8 @@ namespace VirtualDesktopSwitcher
         public int UsagePage { get; set; }
         public int ButtonUsage { get; set; }
         public string DevicePath { get; set; }
+        // Product name for display only; matching uses DevicePath.
+        public string DeviceName { get; set; }
 
         [ScriptIgnore]
         public bool IsValid
@@ -59,7 +61,10 @@ namespace VirtualDesktopSwitcher
                 }
                 if (string.Equals(Kind, "hid", StringComparison.OrdinalIgnoreCase))
                 {
-                    return "Controller button " + ButtonUsage + (string.IsNullOrEmpty(DevicePath) ? " (any device)" : " (bound device)");
+                    string device = string.IsNullOrEmpty(DevicePath)
+                        ? "Any controller"
+                        : string.IsNullOrEmpty(DeviceName) ? "Controller" : DeviceName;
+                    return device + " button " + ButtonUsage;
                 }
 
                 string text = string.Empty;
@@ -81,7 +86,8 @@ namespace VirtualDesktopSwitcher
                 Modifiers = Modifiers,
                 UsagePage = UsagePage,
                 ButtonUsage = ButtonUsage,
-                DevicePath = DevicePath
+                DevicePath = DevicePath,
+                DeviceName = DeviceName
             };
         }
     }
@@ -249,26 +255,43 @@ namespace VirtualDesktopSwitcher
         private readonly TextBox binding;
         private readonly Button bind;
         private readonly Button clear;
+        private readonly Label bindHint;
         private readonly NumericUpDown delay;
         private readonly Panel advancedPanel;
         private readonly CheckBox advanced;
+        private readonly int collapsedHeight;
+        private readonly int expandedHeight;
 
         public event EventHandler TimerEnabledChanged;
 
         public ManualSettingsEditor(ManualSettings initial)
+            : this(initial, null)
+        {
+        }
+
+        // timerSection (interval and timer options) is placed directly under the schedule choice
+        // that decides whether it applies.
+        public ManualSettingsEditor(ManualSettings initial, Control timerSection)
         {
             working = initial.Clone();
-            Size = new Size(468, 235);
             AddLabel(this, "When should the stream reset?", 0, 0);
             schedule = NewChoice(this, "schedule", 0, 24, 458,
                 "Automatically", "When I press a button", "Both");
             schedule.SelectedIndex = working.ManualEnabled ? (working.TimerEnabled ? 2 : 1) : 0;
 
-            AddLabel(this, "Reset button", 0, 66);
-            binding = new TextBox { ReadOnly = true, Location = new Point(96, 62), Size = new Size(210, 24) };
+            int top = 62;
+            if (timerSection != null)
+            {
+                timerSection.Location = new Point(0, top);
+                Controls.Add(timerSection);
+                top += timerSection.Height + 8;
+            }
+
+            AddLabel(this, "Reset button", 0, top + 4);
+            binding = new TextBox { ReadOnly = true, Location = new Point(96, top), Size = new Size(210, 24) };
             binding.Text = working.Binding == null ? "Not bound" : working.Binding.DisplayText;
             Controls.Add(binding);
-            bind = new Button { Text = "Bind...", Location = new Point(314, 60), Size = new Size(68, 27) };
+            bind = new Button { Text = "Bind...", Location = new Point(314, top - 2), Size = new Size(68, 27) };
             bind.Click += delegate
             {
                 ManualBinding captured = RawInputCaptureDialog.Show(this);
@@ -276,24 +299,33 @@ namespace VirtualDesktopSwitcher
                 {
                     working.Binding = captured;
                     binding.Text = captured.DisplayText;
+                    RefreshEnabled();
                 }
             };
             Controls.Add(bind);
-            clear = new Button { Text = "Clear", Location = new Point(390, 60), Size = new Size(68, 27) };
-            clear.Click += delegate { working.Binding = null; binding.Text = "Not bound"; };
+            clear = new Button { Text = "Clear", Location = new Point(390, top - 2), Size = new Size(68, 27) };
+            clear.Click += delegate { working.Binding = null; binding.Text = "Not bound"; RefreshEnabled(); };
             Controls.Add(clear);
+            bindHint = new Label
+            {
+                Text = "Click Bind..., then press the key or wheel button to use.",
+                AutoSize = true,
+                Location = new Point(96, top + 30),
+                ForeColor = SystemColors.GrayText
+            };
+            Controls.Add(bindHint);
 
-            AddLabel(this, "Warning", 0, 104);
-            countdown = NewChoice(this, "countdown", 96, 100, 210, "None (immediate)", "1 second", "3 seconds");
+            AddLabel(this, "Countdown", 0, top + 66);
+            countdown = NewChoice(this, "countdown", 96, top + 62, 210, "None (reset immediately)", "1 second", "3 seconds");
             countdown.SelectedIndex = working.CountdownSeconds == 3 ? 2 : working.CountdownSeconds;
-            beep = new CheckBox { Text = "Beep during warning", AutoSize = true, Location = new Point(96, 132), Checked = working.CountdownBeep };
+            beep = new CheckBox { Text = "Beep during countdown", AutoSize = true, Location = new Point(96, top + 94), Checked = working.CountdownBeep };
             Controls.Add(beep);
 
-            actionDescription = new Label { Name = "actionDescription", Location = new Point(0, 162), Size = new Size(458, 36), ForeColor = SystemColors.GrayText };
+            actionDescription = new Label { Name = "actionDescription", Location = new Point(0, top + 124), Size = new Size(458, 36), ForeColor = SystemColors.GrayText };
             Controls.Add(actionDescription);
-            advanced = new CheckBox { Text = "Advanced manual options", AutoSize = true, Location = new Point(0, 205) };
+            advanced = new CheckBox { Text = "Advanced manual options", AutoSize = true, Location = new Point(0, top + 167) };
             Controls.Add(advanced);
-            advancedPanel = new Panel { Location = new Point(0, 238), Size = new Size(468, 84), Visible = false };
+            advancedPanel = new Panel { Location = new Point(0, top + 200), Size = new Size(468, 84), Visible = false };
             Controls.Add(advancedPanel);
             AddLabel(advancedPanel, "Action", 0, 4);
             action = NewChoice(advancedPanel, "action", 96, 0, 362,
@@ -303,6 +335,10 @@ namespace VirtualDesktopSwitcher
             delay = new NumericUpDown { Location = new Point(96, 38), Size = new Size(90, 24), Minimum = 0, Maximum = 60000, Value = working.RestartDelayMilliseconds };
             advancedPanel.Controls.Add(delay);
             AddLabel(advancedPanel, "milliseconds on the temporary codec", 194, 42);
+
+            collapsedHeight = top + 197;
+            expandedHeight = top + 292;
+            Size = new Size(468, collapsedHeight);
 
             schedule.SelectedIndexChanged += delegate
             {
@@ -315,7 +351,7 @@ namespace VirtualDesktopSwitcher
             advanced.CheckedChanged += delegate
             {
                 advancedPanel.Visible = advanced.Checked;
-                Height = advanced.Checked ? 330 : 235;
+                Height = advanced.Checked ? expandedHeight : collapsedHeight;
             };
             RefreshEnabled();
         }
@@ -367,14 +403,15 @@ namespace VirtualDesktopSwitcher
 
         private void RefreshEnabled()
         {
-            binding.Enabled = bind.Enabled = clear.Enabled = ManualEnabled;
+            binding.Enabled = bind.Enabled = clear.Enabled = bindHint.Enabled = ManualEnabled;
             countdown.Enabled = ManualEnabled;
             beep.Enabled = ManualEnabled && countdown.SelectedIndex != 0;
             advanced.Enabled = ManualEnabled;
             action.Enabled = ManualEnabled;
             delay.Enabled = ManualEnabled && action.SelectedIndex == 0;
+            bool bound = working.Binding != null && working.Binding.IsValid;
             actionDescription.Text = !ManualEnabled
-                ? "Uses the automatic interval. Your saved button is kept."
+                ? (bound ? "Resets on the automatic timer only. Your saved button is kept for later." : "Resets on the automatic timer only.")
                 : action.SelectedIndex == 1
                     ? "Changes codec and stays there. Works while your game has focus."
                     : "Briefly switches codec, then restores it. Works while your game has focus.";
@@ -433,11 +470,7 @@ namespace VirtualDesktopSwitcher
             editor.SizeChanged += delegate { resize(); };
             resize();
 
-            if (form.ShowDialog() != DialogResult.OK)
-            {
-                throw new InvalidOperationException("Manual trigger configuration cancelled.");
-            }
-            return result;
+            return form.ShowDialog() == DialogResult.OK ? result : null;
         }
     }
 }

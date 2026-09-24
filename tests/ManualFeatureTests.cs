@@ -24,6 +24,7 @@ namespace VirtualDesktopSwitcher.Tests
                 TestSettingsEditor();
                 TestCountdown();
                 TestKeyboardTransitions();
+                TestKeyboardCapture();
                 TestHidTransitions();
                 TestCodecActions();
                 TestScheduledStartupOrdering();
@@ -178,6 +179,40 @@ namespace VirtualDesktopSwitcher.Tests
             Assert(tracker.Process(0x4b, false) == null, "keyboard auto-repeat suppressed");
             tracker.Process(0x4b, true);
             Assert(tracker.Process(0x4b, false) != null, "keyboard release and repress triggers");
+
+            HashSet<int> physicallyDown = new HashSet<int>();
+            KeyboardStateTracker live = new KeyboardStateTracker(physicallyDown.Contains);
+            live.Process(0x11, false);
+            physicallyDown.Add(0x4b);
+            Assert(live.Process(0x4b, false).Modifiers == KeyboardModifiers.None, "modifier whose key-up was missed is dropped");
+            live = new KeyboardStateTracker(physicallyDown.Contains);
+            physicallyDown.Clear();
+            live.Process(0x11, false);
+            Assert(live.Process(0x4b, false).Modifiers == KeyboardModifiers.Control, "unavailable live key state keeps tracked modifiers");
+        }
+
+        private static void TestKeyboardCapture()
+        {
+            KeyboardCaptureSession session = new KeyboardCaptureSession(new KeyboardStateTracker());
+            session.Process(0xa2, false);
+            session.Process(0x4b, false);
+            Assert(session.Binding != null && session.Binding.VirtualKey == 0x4b && session.Binding.Modifiers == (int)KeyboardModifiers.Control, "capture records the chord on press");
+            Assert(!session.Completed, "capture stays open while the chord is held");
+            session.Process(0x4b, true);
+            Assert(!session.Completed, "capture stays open while a modifier is still held");
+            session.Process(0xa2, true);
+            Assert(session.Completed, "capture completes once every key is released");
+
+            session = new KeyboardCaptureSession(new KeyboardStateTracker());
+            session.Process(0x1b, false);
+            Assert(session.Cancelled && session.Binding == null && !session.Completed, "plain Esc cancels once released");
+            session.Process(0x1b, true);
+            Assert(session.Completed && session.Binding == null, "cancelled capture completes without a binding");
+
+            session = new KeyboardCaptureSession(new KeyboardStateTracker());
+            session.Process(0x10, false);
+            session.Process(0x1b, false);
+            Assert(!session.Cancelled && session.Binding.VirtualKey == 0x1b && session.Binding.Modifiers == (int)KeyboardModifiers.Shift, "Esc with a modifier can be bound");
         }
 
         private static void TestHidTransitions()
@@ -197,12 +232,21 @@ namespace VirtualDesktopSwitcher.Tests
             Assert(tracker.Update(firstDevice, ReportsWithId(2, otherUsage)).Single() == otherUsage, "another HID report ID triggers independently");
             Assert(!tracker.Update(firstDevice, Reports(usage)).Any(), "alternating report IDs do not retrigger held buttons");
 
-            ManualBinding deviceBinding = new ManualBinding { Kind = "hid", UsagePage = 9, ButtonUsage = 7, DevicePath = "wheel-a" };
-            Assert(RawInputHelpers.MatchesDevice(deviceBinding, "WHEEL-A"), "bound device comparison is case insensitive");
-            Assert(!RawInputHelpers.MatchesDevice(deviceBinding, "wheel-b"), "another controller cannot trigger a new binding");
-            Assert(deviceBinding.Clone().DevicePath == "wheel-a", "device identity survives cloning");
+            const string wheel = @"\\?\HID#VID_346E&PID_0006&MI_02#8&2f0f1e8&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+            const string wheelOtherPort = @"\\?\HID#VID_346E&PID_0006&MI_02#8&11aa22bb&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+            const string pedals = @"\\?\HID#VID_346E&PID_1000#7&3c4d5e6f&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+            ManualBinding deviceBinding = new ManualBinding { Kind = "hid", UsagePage = 9, ButtonUsage = 7, DevicePath = wheel };
+            Assert(RawInputHelpers.MatchesDevice(deviceBinding, wheel.ToUpperInvariant(), true), "bound device comparison is case insensitive");
+            Assert(!RawInputHelpers.MatchesDevice(deviceBinding, pedals, false), "another controller cannot trigger the binding");
+            Assert(RawInputHelpers.MatchesDevice(deviceBinding, wheelOtherPort, false), "bound controller on another USB port still triggers");
+            Assert(!RawInputHelpers.MatchesDevice(deviceBinding, wheelOtherPort, true), "identical second controller is ignored while the bound one is connected");
+            Assert(!RawInputHelpers.IsBoundDevicePresent(deviceBinding, new[] { pedals }), "missing bound controller is detected");
+            Assert(RawInputHelpers.IsBoundDevicePresent(deviceBinding, new[] { pedals, wheelOtherPort }), "moved bound controller counts as present");
+            ManualBinding unparsed = new ManualBinding { Kind = "hid", UsagePage = 9, ButtonUsage = 7, DevicePath = "wheel-a" };
+            Assert(!RawInputHelpers.MatchesDevice(unparsed, "wheel-b", false), "paths without a hardware ID only match exactly");
+            Assert(deviceBinding.Clone().DevicePath == wheel, "device identity survives cloning");
             deviceBinding.DevicePath = null;
-            Assert(RawInputHelpers.MatchesDevice(deviceBinding, "wheel-b"), "legacy wildcard bindings remain supported");
+            Assert(RawInputHelpers.MatchesDevice(deviceBinding, pedals, false), "legacy wildcard bindings remain supported");
 
             RawInputNative.HIDP_BUTTON_CAPS[] caps = new[]
             {
@@ -236,8 +280,12 @@ namespace VirtualDesktopSwitcher.Tests
 
             fake = new FakeCodecClient("HEVC");
             fake.FailSetCallNumbers.Add(1);
-            AssertThrows(delegate { new Rotator(options, fake).PerformManualAction(rotation); }, "temporary switch failure remains fatal");
+            AssertThrows(delegate { new Rotator(options, fake).PerformManualAction(rotation); }, "temporary switch failure is reported to the caller");
             Assert(fake.SetCalls.SequenceEqual(new[] { "H264", "HEVC" }), "temporary failure attempts original restoration");
+
+            fake = new FakeCodecClient("HEVC");
+            fake.FailSetCallNumbers.Add(1);
+            Assert(new Rotator(options, fake).RunManualAction(rotation) == Rotator.ManualResult.Failed, "failed manual action keeps the run going");
 
             options.ManualAction = ManualAction.Switch;
             fake = new FakeCodecClient("HEVC");

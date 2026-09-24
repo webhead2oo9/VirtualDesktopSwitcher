@@ -33,6 +33,11 @@ namespace VirtualDesktopSwitcher
                         Console.Error.WriteLine("WARNING: " + warning);
                     }
                     settings = ManualSettingsConfigurationDialog.Show(settings);
+                    if (settings == null)
+                    {
+                        Console.WriteLine("Manual settings were not changed.");
+                        return 0;
+                    }
                     ManualSettingsStore.Save(settings);
                     Console.WriteLine("Saved manual settings to " + ManualSettingsStore.SettingsPath);
                     return 0;
@@ -168,12 +173,15 @@ namespace VirtualDesktopSwitcher
                         manualInput.SetEnabled(false);
                         try
                         {
-                            if (!ManualCountdown())
+                            ManualResult result = RunManualAction(codecs);
+                            if (result == ManualResult.Cancelled)
                             {
                                 break;
                             }
-                            PerformManualAction(codecs);
-                            nextTimerDeadline = DateTime.UtcNow.AddMinutes(options.IntervalMinutes);
+                            if (result == ManualResult.Completed)
+                            {
+                                nextTimerDeadline = DateTime.UtcNow.AddMinutes(options.IntervalMinutes);
+                            }
                         }
                         finally
                         {
@@ -260,6 +268,11 @@ namespace VirtualDesktopSwitcher
                 }
                 options.ManualEnabled = false;
                 Log("WARNING: manual trigger unavailable; continuing in timer mode (" + ex.Message + ").");
+                return;
+            }
+            if (!manualInput.BoundDevicePresent)
+            {
+                Log("WARNING: " + options.ManualBinding.DisplayText + " is not connected. The reset button will work once it is plugged in.");
             }
         }
 
@@ -294,6 +307,28 @@ namespace VirtualDesktopSwitcher
             finally
             {
                 manualInput.SetEnabled(true);
+            }
+        }
+
+        // A failed reset must not end the run: in VR the console is not visible, so exiting would
+        // silently disable the button for the rest of the session.
+        internal ManualResult RunManualAction(List<CodecInfo> codecs)
+        {
+            if (!ManualCountdown())
+            {
+                return ManualResult.Cancelled;
+            }
+            try
+            {
+                PerformManualAction(codecs);
+                return ManualResult.Completed;
+            }
+            catch (Exception ex)
+            {
+                Log("WARNING: manual action failed (" + ex.Message + "); still listening for the reset button.");
+                PlayBeep(400, 250);
+                PlayBeep(400, 250);
+                return ManualResult.Failed;
             }
         }
 
@@ -443,7 +478,7 @@ namespace VirtualDesktopSwitcher
             for (int remaining = 5; remaining > 0; remaining--)
             {
                 Stopwatch tick = Stopwatch.StartNew();
-                PlayBeep();
+                PlayBeep(1200, 160);
                 int remainingMilliseconds = Math.Max(0, 1000 - (int)tick.ElapsedMilliseconds);
                 result = WaitHandle.WaitAny(handles, remainingMilliseconds);
                 if (result == 0) return WorkKind.Cancel;
@@ -472,7 +507,7 @@ namespace VirtualDesktopSwitcher
                 if (cancelRequested) return false;
                 Stopwatch tick = Stopwatch.StartNew();
                 Log("Manual action in " + remaining + ".");
-                if (options.ManualCountdownBeep) PlayBeep();
+                if (options.ManualCountdownBeep) PlayBeep(1200, 160);
 
                 int remainingMilliseconds = Math.Max(0, 1000 - (int)tick.ElapsedMilliseconds);
                 if (cancelSignal.WaitOne(remainingMilliseconds))
@@ -484,11 +519,11 @@ namespace VirtualDesktopSwitcher
             return !cancelRequested;
         }
 
-        private static void PlayBeep()
+        private static void PlayBeep(int frequency, int durationMilliseconds)
         {
             try
             {
-                Console.Beep(1200, 160);
+                Console.Beep(frequency, durationMilliseconds);
             }
             catch
             {
@@ -501,6 +536,13 @@ namespace VirtualDesktopSwitcher
             Cancel,
             Manual,
             Timer
+        }
+
+        internal enum ManualResult
+        {
+            Cancelled,
+            Completed,
+            Failed
         }
 
         private List<CodecInfo> ResolveCodecRotation()
